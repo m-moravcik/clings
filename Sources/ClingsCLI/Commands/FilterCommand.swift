@@ -32,6 +32,7 @@ struct FilterCommand: AsyncParsableCommand {
           tags           Tag list
           project        Project name
           area           Area name
+          heading        Heading name within project
           name           Task title
           notes          Task notes
           created        Creation date

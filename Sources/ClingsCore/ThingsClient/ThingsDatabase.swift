@@ -99,7 +99,7 @@ public final class ThingsDatabase: Sendable {
                 sql = """
                     SELECT uuid, title, notes, status, stopDate, deadline, creationDate,
                            userModificationDate, project, area, startDate,
-                           rt1_repeatingTemplate
+                           rt1_repeatingTemplate, heading
                     FROM TMTask
                     WHERE status = 0 AND trashed = 0 AND type = 0
                           AND start = 0 AND project IS NULL AND startDate IS NULL
@@ -112,7 +112,7 @@ public final class ThingsDatabase: Sendable {
                 sql = """
                     SELECT uuid, title, notes, status, stopDate, deadline, creationDate,
                            userModificationDate, project, area, startDate,
-                           rt1_repeatingTemplate
+                           rt1_repeatingTemplate, heading
                     FROM TMTask
                     WHERE status = 0 AND trashed = 0 AND type = 0
                           AND start = 1 AND startDate IS NOT NULL AND startDate <= ?
@@ -125,7 +125,7 @@ public final class ThingsDatabase: Sendable {
                 sql = """
                     SELECT uuid, title, notes, status, stopDate, deadline, creationDate,
                            userModificationDate, project, area, startDate,
-                           rt1_repeatingTemplate
+                           rt1_repeatingTemplate, heading
                     FROM TMTask
                     WHERE status = 0 AND trashed = 0 AND type = 0 AND startDate > ?
                     ORDER BY startDate, "index"
@@ -136,7 +136,7 @@ public final class ThingsDatabase: Sendable {
                 sql = """
                     SELECT uuid, title, notes, status, stopDate, deadline, creationDate,
                            userModificationDate, project, area, startDate,
-                           rt1_repeatingTemplate
+                           rt1_repeatingTemplate, heading
                     FROM TMTask
                     WHERE status = 0 AND trashed = 0 AND type = 0 AND start = 1
                           AND startDate IS NULL
@@ -148,7 +148,7 @@ public final class ThingsDatabase: Sendable {
                 sql = """
                     SELECT uuid, title, notes, status, stopDate, deadline, creationDate,
                            userModificationDate, project, area, startDate,
-                           rt1_repeatingTemplate
+                           rt1_repeatingTemplate, heading
                     FROM TMTask
                     WHERE status = 0 AND trashed = 0 AND type = 0 AND start = 2
                     ORDER BY "index"
@@ -160,7 +160,7 @@ public final class ThingsDatabase: Sendable {
                 sql = """
                     SELECT uuid, title, notes, status, stopDate, deadline, creationDate,
                            userModificationDate, project, area, startDate,
-                           rt1_repeatingTemplate
+                           rt1_repeatingTemplate, heading
                     FROM TMTask
                     WHERE status = 3 AND trashed = 0 AND type = 0
                     ORDER BY stopDate DESC
@@ -172,7 +172,7 @@ public final class ThingsDatabase: Sendable {
                 sql = """
                     SELECT uuid, title, notes, status, stopDate, deadline, creationDate,
                            userModificationDate, project, area, startDate,
-                           rt1_repeatingTemplate
+                           rt1_repeatingTemplate, heading
                     FROM TMTask
                     WHERE trashed = 1 AND type = 0
                     ORDER BY "index"
@@ -194,7 +194,7 @@ public final class ThingsDatabase: Sendable {
             let sql = """
                 SELECT uuid, title, notes, status, stopDate, deadline, creationDate,
                        userModificationDate, project, area, startDate,
-                       rt1_repeatingTemplate
+                       rt1_repeatingTemplate, heading
                 FROM TMTask
                 WHERE status = 0 AND trashed = 0 AND type = 0
                 ORDER BY todayIndex, "index"
@@ -320,7 +320,7 @@ public final class ThingsDatabase: Sendable {
             let sql = """
                 SELECT uuid, title, notes, status, stopDate, deadline, creationDate,
                        userModificationDate, project, area, startDate,
-                       rt1_repeatingTemplate
+                       rt1_repeatingTemplate, heading
                 FROM TMTask
                 WHERE uuid = ? AND type = 0
                 """
@@ -341,7 +341,8 @@ public final class ThingsDatabase: Sendable {
         return try db.read { db in
             let sql = """
                 SELECT uuid, title, notes, status, stopDate, deadline, creationDate,
-                       userModificationDate, project, area, startDate
+                       userModificationDate, project, area, startDate,
+                       rt1_repeatingTemplate, heading
                 FROM TMTask
                 WHERE trashed = 0 AND type = 0 AND status != 3 AND creationDate > ?
                 ORDER BY creationDate DESC
@@ -361,7 +362,7 @@ public final class ThingsDatabase: Sendable {
             let sql = """
                 SELECT uuid, title, notes, status, stopDate, deadline, creationDate,
                        userModificationDate, project, area, startDate,
-                       rt1_repeatingTemplate
+                       rt1_repeatingTemplate, heading
                 FROM TMTask
                 WHERE type = 0 AND trashed = 0
                       AND (title LIKE ? OR notes LIKE ?)
@@ -391,9 +392,15 @@ public final class ThingsDatabase: Sendable {
         let area: Area? = try areaUuid.flatMap { try self.fetchArea(uuid: $0, db: db) }
         let tags = try fetchTagsForTask(uuid: uuid, db: db)
         let checklistItems = try fetchChecklistItems(uuid: uuid, db: db)
+        let headingUuid: String? = row["heading"]
+        let headingTitle: String? = try headingUuid.flatMap { uuid in
+            try Row.fetchOne(db, sql: "SELECT title FROM TMTask WHERE uuid = ? AND type = 2", arguments: [uuid])
+                .map { $0["title"] as String }
+        }
 
         return buildTodo(row: row, uuid: uuid, title: title, notes: notes, statusInt: statusInt,
-                         project: project, area: area, tags: tags, checklistItems: checklistItems)
+                         project: project, area: area, tags: tags, checklistItems: checklistItems,
+                         heading: headingTitle)
     }
 
     /// Batch convert rows to Todos, loading all related data in bulk.
@@ -405,18 +412,21 @@ public final class ThingsDatabase: Sendable {
         var taskUuids: [String] = []
         var projectUuids: Set<String> = []
         var areaUuids: Set<String> = []
+        var headingUuids: Set<String> = []
 
         for row in rows {
             let uuid: String = row["uuid"]
             taskUuids.append(uuid)
             if let projectUuid: String = row["project"] { projectUuids.insert(projectUuid) }
             if let areaUuid: String = row["area"] { areaUuids.insert(areaUuid) }
+            if let headingUuid: String = row["heading"] { headingUuids.insert(headingUuid) }
         }
 
         // Batch fetch all related data
         let tagsByTask = try batchFetchTagsForTasks(uuids: taskUuids, db: db)
         let checklistByTask = try batchFetchChecklistItems(uuids: taskUuids, db: db)
         let areasById = try batchFetchAreas(uuids: areaUuids, db: db)
+        let headingTitlesById = try batchFetchHeadingTitles(uuids: headingUuids, db: db)
 
         // Batch fetch projects (which also need area resolution)
         let projectsById = try batchFetchProjects(uuids: projectUuids, areasById: areasById, db: db)
@@ -429,20 +439,24 @@ public final class ThingsDatabase: Sendable {
             let statusInt: Int = row["status"]
             let projectUuid: String? = row["project"]
             let areaUuid: String? = row["area"]
+            let headingUuid: String? = row["heading"]
 
             let project = projectUuid.flatMap { projectsById[$0] }
             let area = areaUuid.flatMap { areasById[$0] }
             let tags = tagsByTask[uuid] ?? []
             let checklistItems = checklistByTask[uuid] ?? []
+            let headingTitle = headingUuid.flatMap { headingTitlesById[$0] }
 
             return buildTodo(row: row, uuid: uuid, title: title, notes: notes, statusInt: statusInt,
-                             project: project, area: area, tags: tags, checklistItems: checklistItems)
+                             project: project, area: area, tags: tags, checklistItems: checklistItems,
+                             heading: headingTitle)
         }
     }
 
     private func buildTodo(row: Row, uuid: String, title: String, notes: String?,
                            statusInt: Int, project: Project?, area: Area?,
-                           tags: [Tag], checklistItems: [ChecklistItem]) -> Todo {
+                           tags: [Tag], checklistItems: [ChecklistItem],
+                           heading: String? = nil) -> Todo {
         let deadline: Date? = (row["deadline"] as Int?).flatMap {
             ThingsDateConverter.decodeToDate($0)
         }
@@ -471,7 +485,8 @@ public final class ThingsDatabase: Sendable {
             repeatingTemplate: repeatingTemplate,
             creationDate: creationDate,
             modificationDate: modificationDate,
-            scheduledDate: startDate
+            scheduledDate: startDate,
+            heading: heading
         )
     }
 
@@ -515,6 +530,19 @@ public final class ThingsDatabase: Sendable {
                 completed: (row["status"] as Int) == 3
             )
             result[taskUuid, default: []].append(item)
+        }
+        return result
+    }
+
+    private func batchFetchHeadingTitles(uuids: Set<String>, db: Database) throws -> [String: String] {
+        guard !uuids.isEmpty else { return [:] }
+        let uuidArray = Array(uuids)
+        let placeholders = uuidArray.map { _ in "?" }.joined(separator: ",")
+        let sql = "SELECT uuid, title FROM TMTask WHERE uuid IN (\(placeholders)) AND type = 2"
+        let rows = try Row.fetchAll(db, sql: sql, arguments: StatementArguments(uuidArray))
+        var result: [String: String] = [:]
+        for row in rows {
+            result[row["uuid"]] = row["title"]
         }
         return result
     }

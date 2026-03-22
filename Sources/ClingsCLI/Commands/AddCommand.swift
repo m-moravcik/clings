@@ -42,6 +42,9 @@ struct AddCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Add to an area")
     var area: String?
 
+    @Option(name: .long, help: "Add under a heading within the project (uses URL scheme)")
+    var heading: String?
+
     @Flag(name: .long, help: "Show parsed result without creating todo")
     var parseOnly = false
 
@@ -77,23 +80,77 @@ struct AddCommand: AsyncParsableCommand {
             return
         }
 
-        let client = try ThingsClientFactory.create()
-        _ = try await client.createTodo(
-            name: parsed.title,
-            notes: parsed.notes,
-            when: parsed.whenDate,
-            deadline: parsed.deadlineDate,
-            tags: parsed.tags,
-            project: parsed.project,
-            area: parsed.area,
-            checklistItems: parsed.checklistItems
-        )
+        // When --heading is specified, use Things URL scheme (no auth token needed)
+        if let heading = heading {
+            try addViaURLScheme(parsed: parsed, heading: heading)
+        } else {
+            let client = try ThingsClientFactory.create()
+            _ = try await client.createTodo(
+                name: parsed.title,
+                notes: parsed.notes,
+                when: parsed.whenDate,
+                deadline: parsed.deadlineDate,
+                tags: parsed.tags,
+                project: parsed.project,
+                area: parsed.area,
+                checklistItems: parsed.checklistItems
+            )
+        }
 
         let outputFormatter: OutputFormatter = output.json
             ? JSONOutputFormatter()
             : TextOutputFormatter(useColors: !output.noColor)
 
         print(outputFormatter.format(message: "Created: \(parsed.title)"))
+    }
+
+    private func addViaURLScheme(parsed: ParsedTask, heading: String) throws {
+        var queryItems = [
+            URLQueryItem(name: "title", value: parsed.title),
+            URLQueryItem(name: "heading", value: heading),
+        ]
+        if let notes = parsed.notes {
+            queryItems.append(URLQueryItem(name: "notes", value: notes))
+        }
+        if let project = parsed.project {
+            queryItems.append(URLQueryItem(name: "list", value: project))
+        }
+        if let area = parsed.area {
+            queryItems.append(URLQueryItem(name: "list", value: area))
+        }
+        if let whenDate = parsed.whenDate {
+            let formatter = DateFormatter()
+            formatter.dateFormat = "yyyy-MM-dd"
+            queryItems.append(URLQueryItem(name: "when", value: formatter.string(from: whenDate)))
+        }
+        if let deadlineDate = parsed.deadlineDate {
+            let formatter = DateFormatter()
+            formatter.dateFormat = "yyyy-MM-dd"
+            queryItems.append(URLQueryItem(name: "deadline", value: formatter.string(from: deadlineDate)))
+        }
+        if !parsed.tags.isEmpty {
+            queryItems.append(URLQueryItem(name: "tags", value: parsed.tags.joined(separator: ",")))
+        }
+        if !parsed.checklistItems.isEmpty {
+            queryItems.append(URLQueryItem(name: "checklist-items", value: parsed.checklistItems.joined(separator: "\n")))
+        }
+
+        guard var components = URLComponents(string: "things:///add") else {
+            throw ThingsError.operationFailed("Internal error: failed to parse Things URL base")
+        }
+        components.queryItems = queryItems
+        guard let url = components.url?.absoluteString else {
+            throw ThingsError.operationFailed("Failed to construct Things URL")
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        process.arguments = [url]
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw ThingsError.operationFailed("Failed to add via Things URL scheme (exit code \(process.terminationStatus))")
+        }
     }
 
     private func parseSimpleDate(_ str: String) -> Date? {

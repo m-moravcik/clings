@@ -192,6 +192,9 @@ public struct TextOutputFormatter: OutputFormatter {
         if let area = todo.area {
             lines.append("Area: \(area.name)")
         }
+        if let heading = todo.heading {
+            lines.append("Heading: \(heading)")
+        }
 
         // Tags
         if !todo.tags.isEmpty {
@@ -336,10 +339,11 @@ struct TodoJSON: Encodable {
     let checklistItems: [ChecklistItemJSON]
     let creationDate: String
     let modificationDate: String
+    let heading: String?
 
     enum CodingKeys: String, CodingKey {
         case id, name, notes, status, deadlineDate, startDate, isRecurring, tags, project, area
-        case checklistItems, creationDate, modificationDate
+        case checklistItems, creationDate, modificationDate, heading
     }
 
     init(from todo: Todo) {
@@ -358,6 +362,7 @@ struct TodoJSON: Encodable {
         self.checklistItems = todo.checklistItems.map { ChecklistItemJSON(from: $0) }
         self.creationDate = formatter.string(from: todo.creationDate)
         self.modificationDate = formatter.string(from: todo.modificationDate)
+        self.heading = todo.heading
     }
 
     func encode(to encoder: Encoder) throws {
@@ -366,6 +371,7 @@ struct TodoJSON: Encodable {
         try container.encode(checklistItems, forKey: .checklistItems)
         try container.encode(creationDate, forKey: .creationDate)
         try container.encode(deadlineDate, forKey: .deadlineDate)
+        try container.encode(heading, forKey: .heading)
         try container.encode(id, forKey: .id)
         try container.encode(isRecurring, forKey: .isRecurring)
         try container.encode(modificationDate, forKey: .modificationDate)

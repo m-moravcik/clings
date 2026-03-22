@@ -24,6 +24,7 @@ public struct Todo: Codable, Identifiable, Equatable, Hashable, Sendable {
     public var creationDate: Date
     public var modificationDate: Date
     public var scheduledDate: Date?
+    public var heading: String?
 
     public init(
         id: String,
@@ -39,7 +40,8 @@ public struct Todo: Codable, Identifiable, Equatable, Hashable, Sendable {
         repeatingTemplate: String? = nil,
         creationDate: Date = Date(),
         modificationDate: Date = Date(),
-        scheduledDate: Date? = nil
+        scheduledDate: Date? = nil,
+        heading: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -55,6 +57,7 @@ public struct Todo: Codable, Identifiable, Equatable, Hashable, Sendable {
         self.creationDate = creationDate
         self.modificationDate = modificationDate
         self.scheduledDate = scheduledDate
+        self.heading = heading
     }
 
     enum CodingKeys: String, CodingKey {
@@ -72,6 +75,7 @@ public struct Todo: Codable, Identifiable, Equatable, Hashable, Sendable {
         case creationDate
         case modificationDate
         case scheduledDate
+        case heading
     }
 
     public init(from decoder: Decoder) throws {
@@ -97,6 +101,7 @@ public struct Todo: Codable, Identifiable, Equatable, Hashable, Sendable {
         creationDate = try container.decodeIfPresent(Date.self, forKey: .creationDate) ?? Date()
         modificationDate = try container.decodeIfPresent(Date.self, forKey: .modificationDate) ?? Date()
         scheduledDate = try container.decodeIfPresent(Date.self, forKey: .scheduledDate)
+        heading = try container.decodeIfPresent(String.self, forKey: .heading)
     }
 
     // MARK: - Computed Properties
@@ -160,6 +165,8 @@ extension Todo: Filterable {
             return .optionalString(project?.name)
         case "area":
             return .optionalString(area?.name)
+        case "heading":
+            return .optionalString(heading)
         case "when", "scheduled":
             return .optionalDate(scheduledDate)
         case "created", "creationdate":
