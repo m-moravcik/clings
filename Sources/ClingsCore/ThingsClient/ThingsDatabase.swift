@@ -376,6 +376,47 @@ public final class ThingsDatabase: Sendable {
         }
     }
 
+    // MARK: - Counts
+
+    /// Count completed todos since a given date without loading full Todo objects.
+    public func countCompleted(since date: Date) throws -> Int {
+        let db = try openDatabase()
+        return try db.read { db in
+            let timestamp = date.timeIntervalSince1970
+            let sql = "SELECT COUNT(*) FROM TMTask WHERE status = 3 AND trashed = 0 AND type = 0 AND userModificationDate >= ?"
+            return try Int.fetchOne(db, sql: sql, arguments: [timestamp]) ?? 0
+        }
+    }
+
+    /// Count canceled todos since a given date without loading full Todo objects.
+    public func countCanceled(since date: Date) throws -> Int {
+        let db = try openDatabase()
+        return try db.read { db in
+            let timestamp = date.timeIntervalSince1970
+            let sql = "SELECT COUNT(*) FROM TMTask WHERE status = 2 AND trashed = 0 AND type = 0 AND userModificationDate >= ?"
+            return try Int.fetchOne(db, sql: sql, arguments: [timestamp]) ?? 0
+        }
+    }
+
+    /// Return daily completion counts (day -> count) since a given date.
+    public func dailyCompletionCounts(since date: Date) throws -> [Date: Int] {
+        let db = try openDatabase()
+        let timestamp = date.timeIntervalSince1970
+        let rows = try db.read { db in
+            try Row.fetchAll(db,
+                sql: "SELECT userModificationDate FROM TMTask WHERE status = 3 AND trashed = 0 AND type = 0 AND userModificationDate >= ?",
+                arguments: [timestamp])
+        }
+        let calendar = Calendar.current
+        var counts: [Date: Int] = [:]
+        for row in rows {
+            let ts: Double = row["userModificationDate"]
+            let day = calendar.startOfDay(for: Date(timeIntervalSince1970: ts))
+            counts[day, default: 0] += 1
+        }
+        return counts
+    }
+
     // MARK: - Helper Methods
 
     /// Convert a single row to a Todo, fetching related data individually.

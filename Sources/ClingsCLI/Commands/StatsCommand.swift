@@ -211,21 +211,15 @@ struct StatsCollector {
         let upcoming = try db.fetchList(.upcoming)
         let anytime = try db.fetchList(.anytime)
         let someday = try db.fetchList(.someday)
-        let logbook = try db.fetchList(.logbook)
 
         // Calculate totals
         let allOpen = inbox + today + upcoming + anytime + someday
         let totalOpen = allOpen.count
 
-        // Completed/canceled in period
+        // Completed/canceled in period — use direct SQL count to avoid the logbook 500-item limit
         let periodStart = Calendar.current.date(byAdding: .day, value: -days, to: Date())!
-        let completedInPeriod = logbook.filter { todo in
-            todo.status == .completed && todo.modificationDate >= periodStart
-        }.count
-
-        let canceledInPeriod = logbook.filter { todo in
-            todo.status == .canceled && todo.modificationDate >= periodStart
-        }.count
+        let completedInPeriod = try db.countCompleted(since: periodStart)
+        let canceledInPeriod = try db.countCanceled(since: periodStart)
 
         // Overdue
         let todayStart = Calendar.current.startOfDay(for: Date())
@@ -286,8 +280,6 @@ struct StatsCollector {
     /// Collect daily completion counts for trends/heatmap.
     func collectDailyCompletions(days: Int) throws -> [Date: Int] {
         let db = try ThingsDatabase()
-        let logbook = try db.fetchList(.logbook)
-
         let calendar = Calendar.current
         let periodStart = calendar.date(byAdding: .day, value: -days, to: Date())!
 
@@ -296,18 +288,14 @@ struct StatsCollector {
         // Initialize all days to 0
         for i in 0..<days {
             if let date = calendar.date(byAdding: .day, value: -i, to: Date()) {
-                let dayStart = calendar.startOfDay(for: date)
-                dailyCounts[dayStart] = 0
+                dailyCounts[calendar.startOfDay(for: date)] = 0
             }
         }
 
-        // Count completions
-        for todo in logbook where todo.status == .completed {
-            let modDate = todo.modificationDate
-            if modDate >= periodStart {
-                let dayStart = calendar.startOfDay(for: modDate)
-                dailyCounts[dayStart, default: 0] += 1
-            }
+        // Merge in actual counts from SQL (no logbook limit issue)
+        let sqlCounts = try db.dailyCompletionCounts(since: periodStart)
+        for (day, count) in sqlCounts {
+            dailyCounts[day, default: 0] += count
         }
 
         return dailyCounts
