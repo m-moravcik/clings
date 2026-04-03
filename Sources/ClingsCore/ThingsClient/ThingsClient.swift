@@ -55,7 +55,8 @@ public protocol ThingsClientProtocol: Sendable {
         tags: [String],
         project: String?,
         area: String?,
-        checklistItems: [String]
+        checklistItems: [String],
+        recurrence: String?
     ) async throws -> String
     func createProject(
         name: String,
@@ -93,6 +94,21 @@ extension ThingsClientProtocol {
 
     public func search(query: String) async throws -> [Todo] {
         try await search(query: query, limit: 100)
+    }
+
+    public func createTodo(
+        name: String,
+        notes: String? = nil,
+        when: Date? = nil,
+        deadline: Date? = nil,
+        tags: [String] = [],
+        project: String? = nil,
+        area: String? = nil,
+        checklistItems: [String] = []
+    ) async throws -> String {
+        try await createTodo(name: name, notes: notes, when: when, deadline: deadline,
+                             tags: tags, project: project, area: area,
+                             checklistItems: checklistItems, recurrence: nil)
     }
 }
 
@@ -221,7 +237,8 @@ public actor ThingsClient: ThingsClientProtocol {
         tags: [String],
         project: String?,
         area: String?,
-        checklistItems: [String]
+        checklistItems: [String],
+        recurrence: String?
     ) async throws -> String {
         let script = JXAScripts.createTodoAppleScript(
             name: name,

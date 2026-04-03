@@ -63,8 +63,10 @@ public final class HybridThingsClient: ThingsClientProtocol, @unchecked Sendable
         tags: [String],
         project: String?,
         area: String?,
-        checklistItems: [String]
+        checklistItems: [String],
+        recurrence: String? = nil
     ) async throws -> String {
+        // Create the todo via AppleScript (recurrence is NOT set here — Things 3 rejects it)
         let script = JXAScripts.createTodoAppleScript(
             name: name,
             notes: notes,
@@ -87,6 +89,12 @@ public final class HybridThingsClient: ThingsClientProtocol, @unchecked Sendable
             throw ThingsError.operationFailed("Failed to create todo - no ID returned")
         }
 
+        // Set recurrence via URL scheme (Things 3 AppleScript can't set recurrence property directly)
+        if let recurrence = recurrence {
+            let token = try AuthTokenStore.loadToken()
+            try setRecurrenceViaURLScheme(id: id, repeat: recurrence, token: token)
+        }
+
         if !tags.isEmpty {
             let tagScript = JXAScripts.setTodoTagsAppleScript(id: id, tags: tags)
             do {
@@ -97,6 +105,28 @@ public final class HybridThingsClient: ThingsClientProtocol, @unchecked Sendable
         }
 
         return id
+    }
+
+    private func setRecurrenceViaURLScheme(id: String, repeat repeatRule: String, token: String) throws {
+        var components = URLComponents(string: "things:///update")!
+        components.queryItems = [
+            URLQueryItem(name: "auth-token", value: token),
+            URLQueryItem(name: "id", value: id),
+            URLQueryItem(name: "repeat", value: repeatRule),
+        ]
+        guard let url = components.url?.absoluteString else {
+            throw ThingsError.operationFailed("Failed to construct Things repeat URL")
+        }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        process.arguments = [url]
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw ThingsError.operationFailed("Failed to set repeat via Things URL scheme")
+        }
+        // Brief wait for Things to process the URL scheme call
+        Thread.sleep(forTimeInterval: 0.5)
     }
 
     public func createProject(

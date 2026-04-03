@@ -89,10 +89,11 @@ struct AddCommand: AsyncParsableCommand {
             return
         }
 
-        // Use URL scheme when --heading or --repeat is specified (no auth token needed)
-        if heading != nil || repeatRule != nil {
-            try addViaURLScheme(parsed: parsed, heading: heading, repeat: repeatRule.map { parseRepeatRule($0) })
+        if let heading = heading {
+            // Heading requires URL scheme (no auth token needed)
+            try addViaURLScheme(parsed: parsed, heading: heading, repeat: nil)
         } else {
+            // Use AppleScript path — supports recurrence natively
             let client = try ThingsClientFactory.create()
             _ = try await client.createTodo(
                 name: parsed.title,
@@ -102,7 +103,8 @@ struct AddCommand: AsyncParsableCommand {
                 tags: parsed.tags,
                 project: parsed.project,
                 area: parsed.area,
-                checklistItems: parsed.checklistItems
+                checklistItems: parsed.checklistItems,
+                recurrence: repeatRule.map { parseRepeatRule($0) }
             )
         }
 

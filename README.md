@@ -249,7 +249,7 @@ The auth token is stored at `~/.config/clings/auth-token` with restricted permis
 ### Homebrew (Recommended)
 
 ```bash
-brew install fxxer/tap/clings
+brew install m-moravcik/tap/clings
 ```
 
 To upgrade to the latest version:
@@ -262,7 +262,7 @@ brew update && brew upgrade clings
 
 ```bash
 # Clone the repository
-git clone https://github.com/fxxer/clings
+git clone https://github.com/m-moravcik/clings
 cd clings
 
 # Build release binary
@@ -437,6 +437,6 @@ GNU General Public License v3.0 (GPLv3) - see [LICENSE](LICENSE)
 
 ## Links
 
-- **This fork:** https://github.com/fxxer/clings
+- **This fork:** https://github.com/m-moravcik/clings
 - **Upstream:** https://github.com/drewburchfield/clings
 - **Things 3:** https://culturedcode.com/things/

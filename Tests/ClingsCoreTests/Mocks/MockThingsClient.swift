@@ -126,7 +126,8 @@ final class MockThingsClient: ThingsClientProtocol, @unchecked Sendable {
         tags: [String],
         project: String?,
         area: String?,
-        checklistItems: [String]
+        checklistItems: [String],
+        recurrence: String?
     ) async throws -> String {
         if let error = errorToThrow { throw error }
         let id = "mock-todo-\(UUID().uuidString.prefix(8))"
