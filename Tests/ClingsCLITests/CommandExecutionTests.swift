@@ -75,7 +75,7 @@ private final class CommandMock: ThingsClientProtocol, @unchecked Sendable {
 
     func createTodo(name: String, notes: String?, when: Date?, deadline: Date?,
                     tags: [String], project: String?, area: String?,
-                    checklistItems: [String], recurrence: String?) async throws -> String {
+                    checklistItems: [String]) async throws -> String {
         if let error = errorToThrow { throw error }
         let id = "mock-\(createdTodos.count)"
         createdTodos.append((name, id))

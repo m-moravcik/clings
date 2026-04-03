@@ -18,12 +18,6 @@ struct AddCommand: AsyncParsableCommand {
           clings add "Review docs for ProjectName"
           clings add "Task // notes go here"
           clings add "Task - checklist item 1 - checklist item 2"
-
-        REPEAT VALUES:
-          daily, weekly, biweekly, monthly, bimonthly, quarterly, biannual, yearly
-          last-friday-of-month, last-monday-of-month, last-thursday-of-month
-          first-friday-of-month, first-monday-of-month
-          FREQ=MONTHLY;BYDAY=-1FR   (any raw RRULE string)
         """
     )
 
@@ -50,9 +44,6 @@ struct AddCommand: AsyncParsableCommand {
 
     @Option(name: .long, help: "Add under a heading within the project (uses URL scheme)")
     var heading: String?
-
-    @Option(name: .customLong("repeat"), help: "Repeat rule: daily, weekly, monthly, last-friday-of-month, or raw RRULE")
-    var repeatRule: String?
 
     @Flag(name: .long, help: "Show parsed result without creating todo")
     var parseOnly = false
@@ -91,9 +82,8 @@ struct AddCommand: AsyncParsableCommand {
 
         if let heading = heading {
             // Heading requires URL scheme (no auth token needed)
-            try addViaURLScheme(parsed: parsed, heading: heading, repeat: nil)
+            try addViaURLScheme(parsed: parsed, heading: heading)
         } else {
-            // Use AppleScript path — supports recurrence natively
             let client = try ThingsClientFactory.create()
             _ = try await client.createTodo(
                 name: parsed.title,
@@ -103,8 +93,7 @@ struct AddCommand: AsyncParsableCommand {
                 tags: parsed.tags,
                 project: parsed.project,
                 area: parsed.area,
-                checklistItems: parsed.checklistItems,
-                recurrence: repeatRule.map { parseRepeatRule($0) }
+                checklistItems: parsed.checklistItems
             )
         }
 
@@ -115,14 +104,11 @@ struct AddCommand: AsyncParsableCommand {
         print(outputFormatter.format(message: "Created: \(parsed.title)"))
     }
 
-    private func addViaURLScheme(parsed: ParsedTask, heading: String?, repeat repeatRule: String?) throws {
+    private func addViaURLScheme(parsed: ParsedTask, heading: String?) throws {
         var queryItems = [URLQueryItem(name: "title", value: parsed.title)]
 
         if let heading = heading {
             queryItems.append(URLQueryItem(name: "heading", value: heading))
-        }
-        if let repeatRule = repeatRule {
-            queryItems.append(URLQueryItem(name: "repeat", value: repeatRule))
         }
         if let notes = parsed.notes {
             queryItems.append(URLQueryItem(name: "notes", value: notes))
@@ -165,43 +151,6 @@ struct AddCommand: AsyncParsableCommand {
         process.waitUntilExit()
         guard process.terminationStatus == 0 else {
             throw ThingsError.operationFailed("Failed to add via Things URL scheme (exit code \(process.terminationStatus))")
-        }
-    }
-
-    /// Convert human-friendly repeat values to Things 3 URL scheme format (RRULE or keyword).
-    private func parseRepeatRule(_ value: String) -> String {
-        switch value.lowercased() {
-        // Simple Things 3 keywords — pass through as-is
-        case "daily", "weekly", "biweekly", "monthly", "bimonthly", "quarterly", "biannual", "yearly":
-            return value.lowercased()
-        // Last weekday of month
-        case "last-monday-of-month", "last-monday-monthly":
-            return "FREQ=MONTHLY;BYDAY=-1MO"
-        case "last-tuesday-of-month", "last-tuesday-monthly":
-            return "FREQ=MONTHLY;BYDAY=-1TU"
-        case "last-wednesday-of-month", "last-wednesday-monthly":
-            return "FREQ=MONTHLY;BYDAY=-1WE"
-        case "last-thursday-of-month", "last-thursday-monthly":
-            return "FREQ=MONTHLY;BYDAY=-1TH"
-        case "last-friday-of-month", "last-friday-monthly":
-            return "FREQ=MONTHLY;BYDAY=-1FR"
-        // First weekday of month
-        case "first-monday-of-month", "first-monday-monthly":
-            return "FREQ=MONTHLY;BYDAY=1MO"
-        case "first-tuesday-of-month", "first-tuesday-monthly":
-            return "FREQ=MONTHLY;BYDAY=1TU"
-        case "first-wednesday-of-month", "first-wednesday-monthly":
-            return "FREQ=MONTHLY;BYDAY=1WE"
-        case "first-thursday-of-month", "first-thursday-monthly":
-            return "FREQ=MONTHLY;BYDAY=1TH"
-        case "first-friday-of-month", "first-friday-monthly":
-            return "FREQ=MONTHLY;BYDAY=1FR"
-        // Last day of month
-        case "last-day-of-month", "last-day-monthly":
-            return "FREQ=MONTHLY;BYMONTHDAY=-1"
-        default:
-            // Pass through raw RRULE strings or unknown values
-            return value
         }
     }
 
