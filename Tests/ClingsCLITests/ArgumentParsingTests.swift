@@ -585,4 +585,25 @@ struct ArgumentParsingTests {
             }
         }
     }
+
+    @Suite("Heading Options")
+    struct HeadingOptions {
+        @Test func addParsesSingleHeading() throws {
+            let command = try AddCommand.parse(["Task", "--project", "P", "--heading", "Week 1"])
+            #expect(command.heading == "Week 1")
+            #expect(command.project == "P")
+        }
+
+        @Test func projectAddParsesMultipleHeadings() throws {
+            let command = try ProjectAddCommand.parse([
+                "June", "--heading", "Week 1", "--heading", "Week 2", "--heading", "Week 3",
+            ])
+            #expect(command.heading == ["Week 1", "Week 2", "Week 3"])
+        }
+
+        @Test func projectAddHeadingDefaultsEmpty() throws {
+            let command = try ProjectAddCommand.parse(["June"])
+            #expect(command.heading.isEmpty)
+        }
+    }
 }

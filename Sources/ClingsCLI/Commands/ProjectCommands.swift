@@ -69,11 +69,16 @@ struct ProjectAddCommand: AsyncParsableCommand {
         discussion: """
         Creates a new project in Things 3.
 
+        Use --heading (repeatable) to create the project with headings in one shot.
+        Headings cannot be added to an existing project afterwards (Things API
+        limitation), so define them here when the project is created.
+
         EXAMPLES:
           clings project add "Q1 Planning"
           clings project add "Feature X" --notes "Implementation of feature X"
           clings project add "Sprint 12" --area "Work" --when today
           clings project add "Vacation" --deadline 2025-06-01 --tags "personal,planning"
+          clings project add "June 2026" --heading "Week 1" --heading "Week 2"
         """
     )
 
@@ -95,6 +100,9 @@ struct ProjectAddCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Tags (comma-separated)")
     var tags: String?
 
+    @Option(name: .long, parsing: .singleValue, help: "Heading to create in the project (repeatable, order preserved)")
+    var heading: [String] = []
+
     @OptionGroup var output: OutputOptions
 
     func run() async throws {
@@ -103,21 +111,40 @@ struct ProjectAddCommand: AsyncParsableCommand {
             throw ThingsError.invalidState("Project title cannot be empty")
         }
 
-        let client = try ThingsClientFactory.create()
         let parsedWhen = try when.map { try parseWhenDate($0) }
         let parsedDeadline = try deadline.map { try parseWhenDate($0) }
         let tagList = tags?
             .split(separator: ",")
             .map { String($0).trimmingCharacters(in: .whitespaces) } ?? []
 
-        _ = try await client.createProject(
-            name: trimmedTitle,
-            notes: notes,
-            when: parsedWhen,
-            deadline: parsedDeadline,
-            tags: tagList,
-            area: area
-        )
+        let cleanedHeadings = heading
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        if cleanedHeadings.isEmpty {
+            // No headings: keep the safe JXA path (official automation API).
+            let client = try ThingsClientFactory.create()
+            _ = try await client.createProject(
+                name: trimmedTitle,
+                notes: notes,
+                when: parsedWhen,
+                deadline: parsedDeadline,
+                tags: tagList,
+                area: area
+            )
+        } else {
+            // Headings require the URL scheme: Things' AppleScript/JXA API has no
+            // heading class, so add-project's to-dos JSON is the only programmatic way.
+            try ProjectURLScheme.addProject(
+                title: trimmedTitle,
+                notes: notes,
+                area: area,
+                when: parsedWhen,
+                deadline: parsedDeadline,
+                tags: tagList,
+                headings: cleanedHeadings
+            )
+        }
 
         let formatter: OutputFormatter = output.json
             ? JSONOutputFormatter()

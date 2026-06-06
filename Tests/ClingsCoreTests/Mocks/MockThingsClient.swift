@@ -24,6 +24,9 @@ final class MockThingsClient: ThingsClientProtocol, @unchecked Sendable {
     /// All tags to return.
     var tags: [Tag] = []
 
+    /// Headings to return, keyed by the projectId passed to fetchHeadings.
+    var headingsForProject: [String: [Heading]] = [:]
+
     /// Single todo lookup by ID.
     var todoById: [String: Todo] = [:]
 
@@ -102,7 +105,7 @@ final class MockThingsClient: ThingsClientProtocol, @unchecked Sendable {
 
     func fetchHeadings(projectId: String) async throws -> [Heading] {
         if let error = errorToThrow { throw error }
-        return []
+        return headingsForProject[projectId] ?? []
     }
 
     func fetchTodo(id: String) async throws -> Todo {

@@ -286,17 +286,14 @@ public final class ThingsDatabase: Sendable {
         let db = try openDatabase()
 
         return try db.read { db in
-            // Resolve name → UUID if needed
-            let resolvedId: String
-            if projectId.contains(" ") || projectId.count < 20 {
-                // Looks like a name — try to resolve to UUID
-                let projectRow = try Row.fetchOne(db,
-                    sql: "SELECT uuid FROM TMTask WHERE title = ? AND type = 1 AND trashed = 0 LIMIT 1",
-                    arguments: [projectId])
-                resolvedId = projectRow?["uuid"] ?? projectId
-            } else {
-                resolvedId = projectId
-            }
+            // Resolve name → UUID. Don't guess by length/spaces: Things UUIDs are
+            // 22 chars with no spaces, which collides with long single-word project
+            // names. Instead try a title match first; fall back to treating the input
+            // as a UUID only when no project with that title exists.
+            let projectRow = try Row.fetchOne(db,
+                sql: "SELECT uuid FROM TMTask WHERE title = ? AND type = 1 AND trashed = 0 LIMIT 1",
+                arguments: [projectId])
+            let resolvedId: String = projectRow?["uuid"] ?? projectId
 
             let rows = try Row.fetchAll(db,
                 sql: """

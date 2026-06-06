@@ -5,6 +5,19 @@ All notable changes to clings will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-06-07
+
+### Added
+
+- **`--heading` option for `project add`**: Create a project together with its headings in a single command, via the Things `json` URL scheme. Repeatable and order-preserving. Requires an auth token (set with `clings config set-auth-token`).
+  - `clings project add "June 2026" --heading "Week 1" --heading "Week 2" --heading "Week 3"`
+  - Headings cannot be added to an existing project afterwards — a Things API limitation — so define them at creation time.
+- **Heading validation in `add`**: When using `add --heading`, clings now verifies the heading exists in the target project before creating the todo. Things silently drops an unknown `heading` parameter (placing the todo in the project root); clings surfaces an actionable error listing the available headings instead. `--heading` now also requires `--project`.
+
+### Fixed
+
+- **`fetchHeadings` name resolution**: Long single-word project names (≥20 characters, no spaces) were misclassified as UUIDs, so `clings project headings "<name>"` and heading validation returned no results. Project names are now resolved by title first, falling back to UUID only when no matching project exists.
+
 ## [0.3.3] - 2026-04-03
 
 ### Added

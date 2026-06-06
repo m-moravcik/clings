@@ -356,4 +356,50 @@ final class ThingsDatabaseTests: XCTestCase {
     func testDatabasePathProperty() throws {
         XCTAssertEqual(db.path, builder.path)
     }
+
+    // MARK: - fetchHeadings
+
+    /// Builds a fresh DB with one project (long, space-free name) holding two headings.
+    ///
+    /// The builder must outlive the returned database: its `deinit` deletes the
+    /// temp file, so the caller has to keep the returned builder alive.
+    private func makeHeadingFixture() throws
+        -> (builder: TestDatabaseBuilder, db: ThingsDatabase, projectId: String, projectName: String) {
+        let b = try TestDatabaseBuilder()
+        let projectName = "CLINGS_VERIFY2_1780760768" // long, no spaces — the regression case
+        let projectId = b.addTask(title: projectName, type: 1)
+        b.addTask(uuid: "h-1", title: "Týždeň 1", type: 2, project: projectId, index: 0)
+        b.addTask(uuid: "h-2", title: "Týždeň 2", type: 2, project: projectId, index: 1)
+        let database = try ThingsDatabase(databasePath: b.path)
+        return (b, database, projectId, projectName)
+    }
+
+    func testFetchHeadingsByUUID() throws {
+        let (builder, database, projectId, _) = try makeHeadingFixture()
+        withExtendedLifetime(builder) {
+            let headings = try? database.fetchHeadings(projectId: projectId)
+            XCTAssertEqual(headings?.map(\.title), ["Týždeň 1", "Týždeň 2"])
+        }
+    }
+
+    /// Regression: a long single-word project name was misclassified as a UUID,
+    /// so name resolution never ran and fetchHeadings returned nothing.
+    func testFetchHeadingsByLongSpacelessName() throws {
+        let (builder, database, _, projectName) = try makeHeadingFixture()
+        XCTAssertFalse(projectName.contains(" "))
+        XCTAssertGreaterThanOrEqual(projectName.count, 20)
+
+        try withExtendedLifetime(builder) {
+            let headings = try database.fetchHeadings(projectId: projectName)
+            XCTAssertEqual(headings.map(\.title), ["Týždeň 1", "Týždeň 2"])
+        }
+    }
+
+    func testFetchHeadingsUnknownProjectReturnsEmpty() throws {
+        let (builder, database, _, _) = try makeHeadingFixture()
+        try withExtendedLifetime(builder) {
+            let headings = try database.fetchHeadings(projectId: "does-not-exist")
+            XCTAssertTrue(headings.isEmpty)
+        }
+    }
 }

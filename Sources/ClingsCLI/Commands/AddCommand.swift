@@ -81,6 +81,17 @@ struct AddCommand: AsyncParsableCommand {
         }
 
         if let heading = heading {
+            // Headings live inside a project; a heading without a project is meaningless.
+            guard let headingProject = parsed.project else {
+                throw ThingsError.invalidState(
+                    "--heading requires a project. Use --project \"<name>\" together with --heading."
+                )
+            }
+            // Validate the heading exists before firing the URL scheme: Things silently
+            // drops the heading parameter when it doesn't match, dropping the todo into
+            // the project root instead. Surfacing this up front avoids a confusing no-op.
+            let client = try ThingsClientFactory.create()
+            try await AddCommand.validateHeadingExists(heading, inProject: headingProject, using: client)
             // Heading requires URL scheme (no auth token needed)
             try addViaURLScheme(parsed: parsed, heading: heading)
         } else {
@@ -102,6 +113,47 @@ struct AddCommand: AsyncParsableCommand {
             : TextOutputFormatter(useColors: !output.noColor)
 
         print(outputFormatter.format(message: "Created: \(parsed.title)"))
+    }
+
+    /// Verify that `heading` exists in `project` before relying on the URL scheme.
+    ///
+    /// Things' `add` URL scheme silently ignores an unknown `heading`, so the only
+    /// way to give the user useful feedback is to check the live database first.
+    /// When the database is unavailable (JXA-only fallback) the check is skipped
+    /// with a warning rather than blocking the operation.
+    ///
+    /// Static and client-injected so it can be unit tested without launching Things.
+    static func validateHeadingExists(
+        _ heading: String,
+        inProject project: String,
+        using client: any ThingsClientProtocol
+    ) async throws {
+        let headings: [Heading]
+        do {
+            headings = try await client.fetchHeadings(projectId: project)
+        } catch ThingsError.invalidState {
+            // SQLite not available (JXA-only client). Cannot validate; warn and proceed.
+            FileHandle.standardError.write(Data(
+                "Warning: cannot verify heading '\(heading)' (database unavailable); proceeding.\n".utf8
+            ))
+            return
+        }
+
+        let matched = headings.contains { $0.title == heading }
+        guard matched else {
+            let available = headings.isEmpty
+                ? "Project has no headings."
+                : "Available headings: \(headings.map { "\"\($0.title)\"" }.joined(separator: ", "))."
+            throw ThingsError.notFound(
+                """
+                Heading '\(heading)' not found in project '\(project)'.
+                \(available)
+                Things cannot create headings in an existing project. Create the heading in the \
+                Things UI, or create a new project with headings via:
+                  clings project add "<name>" --heading "\(heading)"
+                """
+            )
+        }
     }
 
     private func addViaURLScheme(parsed: ParsedTask, heading: String?) throws {
