@@ -39,13 +39,13 @@ Add tasks using natural language parsing:
 
 ```bash
 clings add "buy milk tomorrow #errands"
-clings add "call mom friday 3pm for Family !high"
+clings add "call mom friday @Family !high"
 clings add "finish report by dec 15 #work"
 clings add "review PR // needs careful testing - check auth - verify tests"
 
 # Supported patterns:
 # - Dates: today, tomorrow, next monday, in 3 days, dec 15
-# - Times: 3pm, 15:00, morning, evening
+#   (a reminder time goes through --when, e.g. --when "friday@15:00")
 # - Tags: #tag1 #tag2
 # - Projects: for ProjectName or @ProjectName
 # - Areas: in AreaName
@@ -63,12 +63,24 @@ clings add "Task title" \
   --deadline "2024-12-31" \
   --tags work urgent \
   --project "Sprint 1" \
-  --area "Work" \
-  --notes "Additional context" \
-  --checklist "Step 1" --checklist "Step 2"
+  --notes "Additional context"
 
-# Add todo under a heading in a project (heading must already exist)
+# --when: today, evening, anytime, someday, a date, or date@HH:MM for a reminder
+clings add "Standup notes" --when evening
+clings add "Call the bank" --when "2026-10-01@14:00"
+clings add "Read later" --when someday
+
+# --project, --area and --heading take a title or an ID
 clings add "Task" --project "Week #9" --heading "Personal"
+clings add "Task" --area 9ehDXsRrBH7w4cSbLZY1pt
+```
+
+`add` prints the new todo's ID (`--json` returns `{"id": ..., "message": ...}`) and
+fails loudly on an unparseable date or an unknown project instead of dropping the
+value. Evening, reminder times, headings and checklist items are applied with a
+URL scheme update right after creating the todo, which needs an auth token.
+
+```bash
 
 # Preview without creating
 clings add "Test task tomorrow #work" --parse-only
@@ -106,26 +118,61 @@ Manage individual todos:
 # Show details
 clings show <ID>
 
-# Update properties
+# Update properties (no auth token needed)
 clings update <ID> --name "New title"
 clings update <ID> --notes "Updated notes"
-clings update <ID> --due 2024-12-25
+clings update <ID> --deadline 2024-12-25
 clings update <ID> --tags work urgent
+clings update <ID> --project "Week #9"          # title or ID
 
 # Schedule and organize (requires auth token, see Configuration)
 clings update <ID> --when tomorrow
+clings update <ID> --when "2026-10-01@14:00"    # with a reminder
 clings update <ID> --heading "Personal"
 clings update <ID> --project "Week #9" --heading "Career"
-clings update <ID> --when today --heading "In Progress"
+clings update <ID> --area "Work"
+clings update <ID> --append-notes "Called back, waiting"
+clings update <ID> --add-tags waiting
+clings update <ID> --clear-deadline
 
-# Complete, cancel, or delete
+# Complete, cancel, delete, duplicate
 clings complete <ID>             # or: clings done <ID>
 clings complete --title "milk"   # complete by title search
 clings reopen <ID>               # reopen a completed/canceled todo
 clings cancel <ID>
-clings delete <ID>               # or: clings rm <ID>
-clings delete <ID> --force       # skip confirmation
+clings delete <ID>               # moves to the Trash; or: clings rm <ID>
+clings duplicate <ID>            # requires auth token
+
+# Reveal in Things
+clings open today
+clings open <ID>
+clings open "Work" --filter urgent
 ```
+
+URL scheme updates are confirmed: clings watches the todo in the database and
+reports an error when Things does not apply the change within a few seconds
+(Things shows its own error dialog in that case).
+
+### Undo
+
+Every change made through clings can be reversed:
+
+```bash
+clings undo            # undo the latest change (a whole bulk command at once)
+clings undo --show     # show what would be undone
+clings undo --list     # recent history
+```
+
+| Change | Undo |
+|--------|------|
+| `add` | moves the new todo to the Trash |
+| `update`, `bulk tag`, `bulk move` | restores title, notes, schedule, reminder, deadline, tags, project/area/heading and checklist (needs auth token) |
+| `complete`, `cancel` | reopens |
+| `reopen` | completes or cancels again |
+| `delete` | takes it out of the Trash, back to its list |
+
+The last 50 changes are kept in `~/.config/clings/undo-history.json` (0600).
+Changes made in the Things app itself are not tracked.
 
 ### 5. Project Management
 
@@ -153,6 +200,13 @@ clings project headings "Week #9" --json
 ```
 
 > **Note:** Headings can only be created at project creation time via `--heading`. To add headings to an existing project, use the Things 3 app directly.
+
+```bash
+# Update a project (URL scheme options need an auth token)
+clings project update <ID> --when someday
+clings project update <ID> --area "Work" --append-notes "On hold" --add-tags waiting
+clings project update <ID> --clear-deadline
+```
 
 ### 6. Bulk Operations
 
@@ -216,7 +270,7 @@ clings completions fish > ~/.config/fish/completions/clings.fish
 
 ### 10. Configuration
 
-Set up the Things 3 auth token for features that use the Things URL scheme (`--when`, `--heading`):
+Set up the Things 3 auth token for features that use the Things URL scheme:
 
 ```bash
 # Get your auth token from Things 3:
@@ -228,15 +282,18 @@ clings config set-auth-token <your-token>
 
 The auth token is stored at `~/.config/clings/auth-token` with restricted permissions (0600).
 
-**Commands requiring auth token:**
-- `clings update <ID> --when <date>` — schedule a todo
-- `clings update <ID> --heading <name>` — move todo under a heading
+**Needs the auth token:**
+- `add` with `--when evening`, a reminder time, `--heading` or checklist items
+- `update` with `--when`, `--heading`, `--area`, `--append-notes`, `--prepend-notes`, `--add-tags`, `--clear-deadline` or checklist options
+- `project add --heading`, `project update` with `--when`, `--area`, `--append-notes`, `--prepend-notes`, `--add-tags`, `--clear-deadline`
+- `duplicate`
+- `undo` of an update (and of deleting a scheduled todo)
 
-**Commands that do NOT require auth token:**
-- All read commands
-- `clings add` (including `--heading`, `--checklist`)
-- `clings project add` (including `--heading`)
-- `clings complete`, `cancel`, `delete`
+**Works without it:**
+- All read commands and `open`
+- `add` with a date, deadline, tags, project or area
+- `update` with `--name`, `--notes`, `--deadline`, `--tags`, `--project`
+- `complete`, `cancel`, `reopen`, `delete`, `bulk`, and undoing them
 
 ## Requirements
 
@@ -331,22 +388,27 @@ clings project --help
 | `projects` | - | List all projects |
 | `project list` | `project ls` | List all projects |
 | `project add` | - | Create a new project (supports `--heading`) |
+| `project update` | - | Update a project's properties |
 | `project headings` | - | List headings in a project |
 | `areas` | - | List all areas |
 | `tags` | - | Manage tags |
 | `show` | - | Show details of a todo by ID |
-| `add` | - | Add a new todo (supports `--heading`, `--checklist`) |
-| `update` | - | Update a todo's properties (supports `--when`, `--heading`) |
+| `add` | - | Add a new todo; prints its ID |
+| `update` | - | Update a todo's properties |
+| `duplicate` | - | Duplicate a todo |
 | `complete` | `done` | Mark a todo as completed |
 | `reopen` | - | Reopen a completed/canceled todo |
 | `cancel` | - | Cancel a todo |
 | `delete` | `rm` | Delete a todo (moves to trash) |
+| `undo` | - | Undo the latest change made with clings |
+| `open` | - | Reveal a todo, project, area, tag or list in Things |
 | `search` | `find`, `f` | Search todos by text |
 | `filter` | - | Filter todos using SQL-like expressions |
 | `bulk` | - | Bulk operations on multiple todos |
 | `stats` | - | View productivity statistics |
 | `review` | - | GTD weekly review workflow (start, status, clear) |
 | `config` | - | Configure clings settings (auth token) |
+| `doctor` | - | Check clings setup and local environment |
 | `completions` | - | Generate shell completions |
 
 ## Output Formats
@@ -375,9 +437,9 @@ clings project headings "Week #9" --json | jq '.items[].title'
 ## Data Safety
 
 - **Read operations:** Use direct SQLite access to the Things 3 database (read-only, fast)
-- **Write operations:** Use Apple's JavaScript for Automation (JXA) through the official Things 3 API
-- **Scheduling and heading moves:** Use the Things 3 URL scheme (requires auth token) since `activationDate` is read-only in JXA
-- **New todos under headings:** Use `things:///add` URL scheme (no auth token required)
+- **Write operations:** Use AppleScript/JXA through the official Things 3 API (creating, scheduling via `schedule`, completing, trashing, moving between lists)
+- **Everything AppleScript cannot set** (evening, reminders, headings, checklists, clearing deadlines): the Things 3 `json` URL scheme (requires auth token), confirmed against the database afterwards
+- **List membership** mirrors Things itself: repeating templates only show in Upcoming, todos of Someday/completed/trashed projects are hidden, Someday lists loose todos only
 - **No direct database writes:** clings never writes directly to the Things 3 database
 
 ### Best Practices

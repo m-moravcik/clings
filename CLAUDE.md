@@ -54,7 +54,8 @@ Sources/
 │   ├── Models/                # Todo, Project, Area, Tag, ChecklistItem, Status
 │   ├── NLP/                   # Natural language task parsing
 │   ├── Output/                # OutputFormatter (pretty + JSON)
-│   ├── ThingsClient/          # ThingsDatabase (SQLite), JXAScripts, HybridThingsClient
+│   ├── ThingsClient/          # ThingsDatabase (SQLite), JXAScripts, HybridThingsClient, ThingsURLScheme
+│   ├── Undo/                  # UndoStore (history file), UndoPlanner (entry -> restore steps)
 │   └── Utils/                 # ThingsDateConverter, SchemaIntrospector
 Tests/
 ├── ClingsCoreTests/
@@ -62,6 +63,14 @@ Tests/
 │   └── ThingsClient/          # JXAScriptsTests
 ├── SchemaBaseline/            # schema-baseline.json (schema drift detection)
 ```
+
+### Things write-path facts (verified against Things 3.24)
+
+- AppleScript `activation date` is read-only; schedule with `schedule <todo> for <date>`.
+- AppleScript cannot create checklist items (`make new to do` inside a to-do fails and leaves a stray Inbox to-do), set evening/reminders, headings, or clear a deadline. Those go through the `json` URL scheme.
+- `json` update payloads differ from the published docs: `add-tags` is an array; `append-`/`prepend-checklist-items` are arrays of checklist-item objects; `tags: []` does not clear tags (AppleScript `set tag names to ""` does). Wrong shapes make Things show an error dialog, so writes are confirmed via `userModificationDate` (`ChangeConfirmation`).
+- `list-id` alone drops the heading; send `heading-id` with it. Only a move to the Inbox detaches a to-do from its project.
+- Scheduling a plain day keeps an existing reminder; `when: someday` clears it.
 
 ### Design Principles
 
@@ -218,7 +227,10 @@ Commands:
   anytime                Show anytime todos
   someday, s             Show someday todos
   logbook, l             Show completed todos
+  trash                  Show trashed todos
+  recent                 Show recently created todos
   projects               List all projects
+  project                Manage projects (list, add, update, headings)
   areas                  List all areas
   tags                   List all tags
   show                   Show details of a todo by ID
@@ -226,8 +238,10 @@ Commands:
   complete, done         Mark a todo as completed
   reopen                 Reopen a completed/canceled todo
   cancel                 Cancel a todo
-  delete, rm             Delete a todo
+  delete, rm             Delete a todo (moves to Trash)
   update                 Update a todo's properties
+  duplicate              Duplicate a todo
+  undo                   Undo the latest change made with clings
   search, find, f        Search todos by text
   bulk                   Bulk operations on multiple todos
   filter                 Filter todos using a query
@@ -235,6 +249,8 @@ Commands:
   stats                  View productivity statistics
   review                 Interactive weekly review workflow
   completions            Generate shell completions
+  config                 Configure clings settings (auth token)
+  doctor                 Check clings setup
 ```
 
 ### Design Principles
