@@ -28,6 +28,18 @@ final class ThingsDateConverterTests: XCTestCase {
         XCTAssertEqual(calendar.component(.day, from: date!), 27)
     }
 
+    func testDecodeSentinelYearReturnsNil() {
+        // Repeating templates with a relative deadline store year 4001.
+        let sentinel = ThingsDateConverter.encode(year: 4001, month: 1, day: 1)
+        XCTAssertNil(ThingsDateConverter.decode(sentinel))
+        XCTAssertNil(ThingsDateConverter.decodeToDate(sentinel))
+    }
+
+    func testCalendarIsGregorianRegardlessOfUserSetting() {
+        XCTAssertEqual(ThingsDateConverter.calendar.identifier, .gregorian)
+        XCTAssertEqual(ThingsDateConverter.calendar.timeZone, TimeZone.current)
+    }
+
     // MARK: - Encode/Decode Roundtrips
 
     func testRoundtrip_20260301() {

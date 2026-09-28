@@ -340,10 +340,18 @@ struct TodoJSON: Encodable {
     let creationDate: String
     let modificationDate: String
     let heading: String?
+    let projectId: String?
+    let areaId: String?
+    let headingId: String?
+    let start: String?
+    let isEvening: Bool
+    let reminderTime: String?
+    let completionDate: String?
 
     enum CodingKeys: String, CodingKey {
         case id, name, notes, status, deadlineDate, startDate, isRecurring, tags, project, area
         case checklistItems, creationDate, modificationDate, heading
+        case projectId, areaId, headingId, start, isEvening, reminderTime, completionDate
     }
 
     init(from todo: Todo) {
@@ -363,21 +371,37 @@ struct TodoJSON: Encodable {
         self.creationDate = formatter.string(from: todo.creationDate)
         self.modificationDate = formatter.string(from: todo.modificationDate)
         self.heading = todo.heading
+        self.projectId = todo.project?.id
+        self.areaId = todo.area?.id
+        self.headingId = todo.headingId
+        self.start = todo.start?.rawValue
+        self.isEvening = todo.isEvening
+        self.reminderTime = todo.reminderTime.map {
+            String(format: "%02d:%02d", $0.hour ?? 0, $0.minute ?? 0)
+        }
+        self.completionDate = todo.completionDate.map { formatter.string(from: $0) }
     }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(area, forKey: .area)
+        try container.encode(areaId, forKey: .areaId)
         try container.encode(checklistItems, forKey: .checklistItems)
+        try container.encode(completionDate, forKey: .completionDate)
         try container.encode(creationDate, forKey: .creationDate)
         try container.encode(deadlineDate, forKey: .deadlineDate)
         try container.encode(heading, forKey: .heading)
+        try container.encode(headingId, forKey: .headingId)
         try container.encode(id, forKey: .id)
+        try container.encode(isEvening, forKey: .isEvening)
         try container.encode(isRecurring, forKey: .isRecurring)
         try container.encode(modificationDate, forKey: .modificationDate)
         try container.encode(name, forKey: .name)
         try container.encode(notes, forKey: .notes)
         try container.encode(project, forKey: .project)
+        try container.encode(projectId, forKey: .projectId)
+        try container.encode(reminderTime, forKey: .reminderTime)
+        try container.encode(start, forKey: .start)
         try container.encode(startDate, forKey: .startDate)
         try container.encode(status, forKey: .status)
         try container.encode(tags, forKey: .tags)

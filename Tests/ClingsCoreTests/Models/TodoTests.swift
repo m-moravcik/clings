@@ -96,6 +96,13 @@ struct TodoTests {
             #expect(todo.isOverdue)
         }
 
+        @Test func isNotOverdueWhenDueToday() {
+            // Things stores deadlines as a calendar day; a task due today is on time until tomorrow.
+            let startOfToday = Calendar.current.startOfDay(for: Date())
+            let todo = Todo(id: "t1", name: "Due today", status: .open, deadlineDate: startOfToday)
+            #expect(!todo.isOverdue)
+        }
+
         @Test func isNotOverdueWhenFutureDue() {
             let futureDate = Date().addingTimeInterval(86400) // Tomorrow
             let todo = Todo(id: "t1", name: "Not Overdue", status: .open, deadlineDate: futureDate)

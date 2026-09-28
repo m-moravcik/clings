@@ -171,6 +171,10 @@ final class TestDatabaseBuilder {
     ///   - start: 0 = inbox, 1 = today/anytime, 2 = someday
     ///   - startDate: Packed date integer (use `ThingsDateConverter.encode`)
     ///   - deadline: Packed date integer
+    ///   - heading: UUID of the heading (type=2 row) the todo is filed under
+    ///   - isRepeatingTemplate: Marks the row as a repeating template (non-null `rt1_recurrenceRule`)
+    ///   - startBucket: 1 = This Evening
+    ///   - reminderTime: Packed time, `hour << 26 | minute << 20`
     @discardableResult
     func addTask(
         uuid: String = UUID().uuidString,
@@ -189,7 +193,11 @@ final class TestDatabaseBuilder {
         creationDate: Double? = nil,
         userModificationDate: Double? = nil,
         stopDate: Double? = nil,
-        repeatingTemplate: String? = nil
+        repeatingTemplate: String? = nil,
+        heading: String? = nil,
+        isRepeatingTemplate: Bool = false,
+        startBucket: Int = 0,
+        reminderTime: Int? = nil
     ) -> String {
         let now = Date().timeIntervalSince1970
         try! dbQueue.write { db in
@@ -199,14 +207,17 @@ final class TestDatabaseBuilder {
                         uuid, title, notes, type, status, trashed, start,
                         startDate, deadline, project, area, "index", todayIndex,
                         creationDate, userModificationDate, stopDate,
-                        rt1_repeatingTemplate
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        rt1_repeatingTemplate, heading, rt1_recurrenceRule,
+                        startBucket, reminderTime
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                 arguments: [
                     uuid, title, notes, type, status, trashed, start,
                     startDate, deadline, project, area, index, todayIndex,
                     creationDate ?? now, userModificationDate ?? now, stopDate,
-                    repeatingTemplate
+                    repeatingTemplate, heading,
+                    isRepeatingTemplate ? Data([0x01]) : nil,
+                    startBucket, reminderTime
                 ]
             )
         }

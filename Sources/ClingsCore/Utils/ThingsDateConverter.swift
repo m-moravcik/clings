@@ -20,7 +20,6 @@ public enum ThingsDateConverter {
 
     // MARK: - Bit Masks & Shifts
 
-    private static let yearMask:  Int = 0x07FF_0000  // bits 26..16
     private static let monthMask: Int = 0x0000_F000  // bits 15..12
     private static let dayMask:   Int = 0x0000_0F80  // bits 11..7
 
@@ -28,25 +27,36 @@ public enum ThingsDateConverter {
     private static let monthShift = 12
     private static let dayShift   = 7
 
+    /// Years at or beyond this value are sentinels, not real dates. Repeating
+    /// templates with a relative deadline store year 4001 in `deadline`.
+    private static let sentinelYear = 4000
+
+    /// The bit fields always hold Gregorian components, whatever calendar the user picked.
+    public static var calendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone.current
+        return calendar
+    }
+
     // MARK: - Decoding
 
     /// Unpack a Things 3 packed date integer into DateComponents.
     public static func decode(_ packedDate: Int) -> DateComponents? {
-        let year  = (packedDate & yearMask)  >> yearShift
+        let year  = packedDate >> yearShift
         let month = (packedDate & monthMask) >> monthShift
         let day   = (packedDate & dayMask)   >> dayShift
 
-        guard year > 0, (1...12).contains(month), (1...31).contains(day) else {
+        guard year > 0, year < sentinelYear, (1...12).contains(month), (1...31).contains(day) else {
             return nil
         }
 
         return DateComponents(year: year, month: month, day: day)
     }
 
-    /// Unpack a Things 3 packed date integer into a Date (midnight, current calendar).
+    /// Unpack a Things 3 packed date integer into a Date (local midnight).
     public static func decodeToDate(_ packedDate: Int) -> Date? {
         guard let components = decode(packedDate) else { return nil }
-        return Calendar.current.date(from: components)
+        return calendar.date(from: components)
     }
 
     // MARK: - Encoding
@@ -58,11 +68,26 @@ public enum ThingsDateConverter {
 
     /// Pack a Date into a Things 3 date integer.
     public static func encodeDate(_ date: Date) -> Int {
-        let components = Calendar.current.dateComponents([.year, .month, .day], from: date)
+        let components = calendar.dateComponents([.year, .month, .day], from: date)
         guard let year = components.year, let month = components.month, let day = components.day else {
             assertionFailure("Failed to extract date components from \(date)")
             return 0
         }
         return encode(year: year, month: month, day: day)
+    }
+
+    // MARK: - Reminder Time
+
+    /// Unpack `reminderTime` (`hour << 26 | minute << 20`) into hour and minute.
+    public static func decodeTime(_ packedTime: Int) -> DateComponents? {
+        let hour = packedTime >> 26
+        let minute = (packedTime >> 20) & 0x3F
+        guard (0...23).contains(hour), (0...59).contains(minute) else { return nil }
+        return DateComponents(hour: hour, minute: minute)
+    }
+
+    /// Pack hour and minute into a `reminderTime` value.
+    public static func encodeTime(hour: Int, minute: Int) -> Int {
+        (hour << 26) | (minute << 20)
     }
 }

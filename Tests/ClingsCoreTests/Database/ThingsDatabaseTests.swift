@@ -267,6 +267,20 @@ final class ThingsDatabaseTests: XCTestCase {
         XCTAssertTrue(daysFromNow >= 29 && daysFromNow <= 31)
     }
 
+    // MARK: - Recent
+
+    func testFetchRecentReturnsOnlyTodosCreatedInWindow() throws {
+        let fresh = try TestDatabaseBuilder()
+        let now = Date().timeIntervalSince1970
+        fresh.addTask(uuid: "new", title: "New", start: 1, creationDate: now - 86_400)
+        fresh.addTask(uuid: "old", title: "Old", start: 1, creationDate: now - 30 * 86_400)
+
+        let recent = try ThingsDatabase(databasePath: fresh.path)
+            .fetchRecent(since: Date(timeIntervalSince1970: now - 7 * 86_400))
+
+        XCTAssertEqual(recent.map(\.id), ["new"])
+    }
+
     // MARK: - Search
 
     func testSearchMatchesTitle() throws {

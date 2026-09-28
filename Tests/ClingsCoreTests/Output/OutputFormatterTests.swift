@@ -42,6 +42,29 @@ struct OutputFormatterTests {
             #expect(output.contains(TestData.todoCompleted.id))
         }
 
+        @Test func formatTodoIncludesSchedulingDetailsAndIds() {
+            var todo = Todo(
+                id: "t1", name: "Call",
+                project: Project(id: "p1", name: "Project"),
+                area: Area(id: "a1", name: "Area"),
+                heading: "Phase 1"
+            )
+            todo.headingId = "h1"
+            todo.start = .someday
+            todo.isEvening = true
+            todo.reminderTime = DateComponents(hour: 9, minute: 5)
+
+            let output = JSONOutputFormatter().format(todos: [todo])
+
+            #expect(output.contains("\"projectId\" : \"p1\""))
+            #expect(output.contains("\"areaId\" : \"a1\""))
+            #expect(output.contains("\"headingId\" : \"h1\""))
+            #expect(output.contains("\"start\" : \"someday\""))
+            #expect(output.contains("\"isEvening\" : true"))
+            #expect(output.contains("\"reminderTime\" : \"09:05\""))
+            #expect(output.contains("\"completionDate\" : null"))
+        }
+
         @Test func formatTodosWithList() {
             let formatter = JSONOutputFormatter()
             let todos = [TestData.todoOpen]
