@@ -37,6 +37,7 @@ private final class HeadingMock: ThingsClientProtocol, @unchecked Sendable {
     func reopenTodo(id: String) async throws {}
     func cancelTodo(id: String) async throws {}
     func deleteTodo(id: String) async throws {}
+    func moveTodoToList(id: String, list: String) async throws {}
     func moveTodo(id: String, toProject: String) async throws {}
     func updateTodo(id: String, name: String?, notes: String?, deadlineDate: Date?, tags: [String]?) async throws {}
     func updateProject(id: String, name: String?, notes: String?, deadlineDate: Date?, tags: [String]?) async throws {}

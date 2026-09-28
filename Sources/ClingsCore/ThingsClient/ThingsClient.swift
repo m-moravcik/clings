@@ -70,6 +70,8 @@ public protocol ThingsClientProtocol: Sendable {
     func cancelTodo(id: String) async throws
     func deleteTodo(id: String) async throws
     func moveTodo(id: String, toProject: String) async throws
+    /// Move a todo to a built-in list ("Inbox", "Anytime", "Someday"); also restores it from the Trash.
+    func moveTodoToList(id: String, list: String) async throws
     func updateTodo(id: String, name: String?, notes: String?, deadlineDate: Date?, tags: [String]?) async throws
     func updateProject(id: String, name: String?, notes: String?, deadlineDate: Date?, tags: [String]?) async throws
 
@@ -224,14 +226,18 @@ public actor ThingsClient: ThingsClientProtocol {
         area: String?,
         checklistItems: [String]
     ) async throws -> String {
+        guard checklistItems.isEmpty else {
+            throw ThingsError.invalidState(
+                "Checklist items cannot be created through AppleScript; apply them with a URL scheme update."
+            )
+        }
         let script = JXAScripts.createTodoAppleScript(
             name: name,
             notes: notes,
             when: when,
             deadline: deadline,
-            project: project,
-            area: area,
-            checklistItems: checklistItems
+            project: project.map { .name($0) },
+            area: area.map { .name($0) }
         )
 
         let id: String
@@ -319,10 +325,18 @@ public actor ThingsClient: ThingsClientProtocol {
     }
 
     public func deleteTodo(id: String) async throws {
-        let script = JXAScripts.deleteTodo(id: id)
-        let result = try await bridge.executeJSON(script, as: MutationResult.self)
-        if !result.success {
-            throw ThingsError.operationFailed(result.error ?? "Unknown error")
+        do {
+            _ = try await bridge.executeAppleScript(JXAScripts.trashTodoAppleScript(id: id))
+        } catch let error as JXAError {
+            throw ThingsError.jxaError(error)
+        }
+    }
+
+    public func moveTodoToList(id: String, list: String) async throws {
+        do {
+            _ = try await bridge.executeAppleScript(JXAScripts.moveTodoToListAppleScript(id: id, list: list))
+        } catch let error as JXAError {
+            throw ThingsError.jxaError(error)
         }
     }
 

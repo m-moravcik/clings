@@ -53,7 +53,9 @@ struct Clings: AsyncParsableCommand {
             CancelCommand.self,
             DeleteCommand.self,
             UpdateCommand.self,
+            DuplicateCommand.self,
             SearchCommand.self,
+            UndoCommand.self,
 
             // Bulk operations
             BulkCommand.self,

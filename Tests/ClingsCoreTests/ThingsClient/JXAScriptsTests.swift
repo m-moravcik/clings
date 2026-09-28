@@ -208,12 +208,54 @@ struct JXAScriptsTests {
         }
     }
 
-    @Suite("Delete Todo Script")
-    struct DeleteTodoScript {
-        @Test func setsStatusCanceled() {
-            // Note: Things 3 doesn't have true delete, so this cancels
-            let script = JXAScripts.deleteTodo(id: "todo-789")
-            #expect(script.contains("todo.status = 'canceled'"))
+    @Suite("Tag Scripts")
+    struct TagScripts {
+        @Test func joinsTagsIntoOneCommaSeparatedString() {
+            // `{"a", "b"} as string` concatenates to "ab" and creates a junk tag.
+            let script = JXAScripts.setTodoTagsAppleScript(id: "t1", tags: ["Alica", "Oliver P"])
+            #expect(script.contains("set tag names of theTodo to \"Alica, Oliver P\""))
+            #expect(!script.contains("as string"))
+        }
+
+        @Test func splitsCommaSeparatedArguments() {
+            let script = JXAScripts.setTodoTagsAppleScript(id: "t1", tags: ["a,b", " c ", "a", ""])
+            #expect(script.contains("set tag names of theTodo to \"a, b, c\""))
+            #expect(script.contains("{\"a\", \"b\", \"c\"}"))
+        }
+
+        @Test func emptyListClearsTags() {
+            let script = JXAScripts.setTodoTagsAppleScript(id: "t1", tags: [])
+            #expect(script.contains("set tag names of theTodo to \"\""))
+        }
+
+        @Test func projectTagsUseTheSameFormat() {
+            let script = JXAScripts.setProjectTagsAppleScript(id: "p1", tags: ["x", "y"])
+            #expect(script.contains("set tag names of theProject to \"x, y\""))
+        }
+    }
+
+    @Suite("Trash Todo Script")
+    struct TrashTodoScript {
+        @Test func movesToTrashInsteadOfCanceling() {
+            // `delete` fails (-1728) for completed/canceled todos; a move to the Trash
+            // list works for every status (verified against Things 3.24).
+            let script = JXAScripts.trashTodoAppleScript(id: "todo-789")
+            #expect(script.contains("move to do id \"todo-789\" to list \"Trash\""))
+            #expect(!script.contains("delete"))
+            #expect(!script.contains("canceled"))
+        }
+
+        @Test func escapesId() {
+            let script = JXAScripts.trashTodoAppleScript(id: "a\"b")
+            #expect(script.contains("to do id \"a\\\"b\""))
+        }
+    }
+
+    @Suite("Move To List Script")
+    struct MoveToListScript {
+        @Test func movesToBuiltInList() {
+            let script = JXAScripts.moveTodoToListAppleScript(id: "todo-1", list: "Someday")
+            #expect(script.contains("move to do id \"todo-1\" to list \"Someday\""))
         }
     }
 
@@ -224,6 +266,12 @@ struct JXAScriptsTests {
             #expect(script.contains("'todo-123'"))
             #expect(script.contains("'My Project'"))
             #expect(script.contains("app.projects.byName"))
+        }
+
+        @Test func acceptsProjectIdOrTitle() {
+            let script = JXAScripts.moveTodo(id: "todo-1", toProject: "P1")
+            #expect(script.contains("app.projects.byId('P1')"))
+            #expect(script.contains("app.projects.byName('P1')"))
         }
 
         @Test func checksProjectExistence() {
@@ -298,20 +346,31 @@ struct JXAScriptsTests {
             #expect(script.contains("notes:\"Some notes\""))
         }
 
-        @Test func withProject() {
-            let script = JXAScripts.createTodoAppleScript(name: "Task", project: "My Project")
+        @Test func withProjectName() {
+            let script = JXAScripts.createTodoAppleScript(name: "Task", project: .name("My Project"))
             #expect(script.contains("set project of newTodo to project \"My Project\""))
         }
 
-        @Test func withArea() {
-            let script = JXAScripts.createTodoAppleScript(name: "Task", area: "Work Area")
-            #expect(script.contains("set area of newTodo to area \"Work Area\""))
+        @Test func withProjectId() {
+            let script = JXAScripts.createTodoAppleScript(name: "Task", project: .id("P1"))
+            #expect(script.contains("set project of newTodo to project id \"P1\""))
         }
 
-        @Test func withChecklistItems() {
-            let script = JXAScripts.createTodoAppleScript(name: "Task", checklistItems: ["Step 1", "Step 2"])
-            #expect(script.contains("name:\"Step 1\""))
-            #expect(script.contains("name:\"Step 2\""))
+        @Test func withAreaId() {
+            let script = JXAScripts.createTodoAppleScript(name: "Task", area: .id("A1"))
+            #expect(script.contains("set area of newTodo to area id \"A1\""))
+        }
+
+        @Test func doesNotSwallowAssignmentErrors() {
+            // A missing project must fail loudly, not silently leave the to-do in the Inbox.
+            let script = JXAScripts.createTodoAppleScript(name: "Task", project: .name("Nope"), area: .name("Nope"))
+            #expect(!script.contains("try"))
+        }
+
+        @Test func neverBuildsChecklistWithAppleScript() {
+            // `make new to do` inside a to-do fails (-10000) and leaves a stray Inbox to-do.
+            let script = JXAScripts.createTodoAppleScript(name: "Task")
+            #expect(!script.contains("tell newTodo"))
         }
 
         @Test func returnsId() {
@@ -320,15 +379,33 @@ struct JXAScriptsTests {
         }
 
         @Test func withDeadline() {
-            let date = Date()
-            let script = JXAScripts.createTodoAppleScript(name: "Task", deadline: date)
+            let script = JXAScripts.createTodoAppleScript(name: "Task", deadline: Date())
             #expect(script.contains("set due date of newTodo to deadlineDate"))
         }
 
-        @Test func withWhen() {
-            let date = Date()
+        @Test func withWhenSchedulesInsteadOfSettingReadOnlyActivationDate() {
+            let script = JXAScripts.createTodoAppleScript(name: "Task", when: Date())
+            #expect(script.contains("schedule newTodo for whenDate"))
+            #expect(!script.contains("activation date"))
+        }
+
+        @Test func resetsDayBeforeMonthToAvoidOverflow() throws {
+            // On Oct 31, setting month 11 first yields Nov 31 -> Dec 1.
+            let script = JXAScripts.createTodoAppleScript(name: "Task", when: Date(), deadline: Date())
+            for variable in ["whenDate", "deadlineDate"] {
+                let reset = try #require(script.range(of: "set day of \(variable) to 1"))
+                let month = try #require(script.range(of: "set month of \(variable) to"))
+                #expect(reset.lowerBound < month.lowerBound)
+            }
+        }
+
+        @Test func usesGregorianComponents() {
+            let components = DateComponents(year: 2026, month: 11, day: 15)
+            let date = ThingsDateConverter.calendar.date(from: components) ?? Date()
             let script = JXAScripts.createTodoAppleScript(name: "Task", when: date)
-            #expect(script.contains("set activation date of newTodo to whenDate"))
+            #expect(script.contains("set year of whenDate to 2026"))
+            #expect(script.contains("set month of whenDate to 11"))
+            #expect(script.contains("set day of whenDate to 15"))
         }
     }
 
@@ -368,7 +445,6 @@ struct JXAScriptsTests {
             JXAScripts.completeTodo(id: "test"),
             JXAScripts.cancelTodo(id: "test"),
             JXAScripts.reopenTodo(id: "test"),
-            JXAScripts.deleteTodo(id: "test"),
             JXAScripts.moveTodo(id: "test", toProject: "Project"),
             JXAScripts.updateTodo(id: "test", name: "Name"),
             JXAScripts.search(query: "test"),

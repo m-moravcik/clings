@@ -65,14 +65,32 @@ public final class HybridThingsClient: ThingsClientProtocol, @unchecked Sendable
         area: String?,
         checklistItems: [String]
     ) async throws -> String {
+        guard checklistItems.isEmpty else {
+            throw ThingsError.invalidState(
+                "Checklist items cannot be created through AppleScript; apply them with a URL scheme update."
+            )
+        }
+        // Resolve titles to IDs up front: addressing by ID is unambiguous when titles
+        // repeat, and an unknown project fails here instead of dropping into the Inbox.
+        let projectRef = try project.map { name -> ThingsItemRef in
+            guard let id = try database.resolveProjectId(name) else {
+                throw ThingsError.notFound("Project '\(name)'")
+            }
+            return .id(id)
+        }
+        let areaRef = try area.map { name -> ThingsItemRef in
+            guard let id = try database.resolveAreaId(name) else {
+                throw ThingsError.notFound("Area '\(name)'")
+            }
+            return .id(id)
+        }
         let script = JXAScripts.createTodoAppleScript(
             name: name,
             notes: notes,
             when: when,
             deadline: deadline,
-            project: project,
-            area: area,
-            checklistItems: checklistItems
+            project: projectRef,
+            area: areaRef
         )
 
         let id: String
@@ -160,10 +178,18 @@ public final class HybridThingsClient: ThingsClientProtocol, @unchecked Sendable
     }
 
     public func deleteTodo(id: String) async throws {
-        let script = JXAScripts.deleteTodo(id: id)
-        let result = try await jxaBridge.executeJSON(script, as: MutationResult.self)
-        if !result.success {
-            throw ThingsError.operationFailed(result.error ?? "Unknown error")
+        do {
+            _ = try await jxaBridge.executeAppleScript(JXAScripts.trashTodoAppleScript(id: id))
+        } catch let error as JXAError {
+            throw ThingsError.jxaError(error)
+        }
+    }
+
+    public func moveTodoToList(id: String, list: String) async throws {
+        do {
+            _ = try await jxaBridge.executeAppleScript(JXAScripts.moveTodoToListAppleScript(id: id, list: list))
+        } catch let error as JXAError {
+            throw ThingsError.jxaError(error)
         }
     }
 

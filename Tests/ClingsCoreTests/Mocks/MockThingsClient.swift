@@ -49,6 +49,7 @@ final class MockThingsClient: ThingsClientProtocol, @unchecked Sendable {
 
     /// Track which todo IDs were deleted.
     private(set) var deletedIds: [String] = []
+    private(set) var movedToList: [(id: String, list: String)] = []
 
     /// Track move operations (todoId, projectName).
     private(set) var moveOperations: [(String, String)] = []
@@ -172,6 +173,11 @@ final class MockThingsClient: ThingsClientProtocol, @unchecked Sendable {
     func deleteTodo(id: String) async throws {
         if let error = errorToThrow { throw error }
         deletedIds.append(id)
+    }
+
+    func moveTodoToList(id: String, list: String) async throws {
+        if let error = errorToThrow { throw error }
+        movedToList.append((id, list))
     }
 
     func moveTodo(id: String, toProject projectName: String) async throws {

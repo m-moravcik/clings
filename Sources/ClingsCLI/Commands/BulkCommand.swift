@@ -121,11 +121,15 @@ struct BulkCompleteCommand: AsyncParsableCommand {
         }
 
         // Execute
+        let batchId = UUID()
+        var undoEntries: [UndoEntry] = []
+        defer { UndoRecorder.record(undoEntries) }
         var completed = 0
         var failed = 0
         for todo in todos {
             do {
                 try await client.completeTodo(id: todo.id)
+                undoEntries.append(UndoEntry(batchId: batchId, operation: .complete, todoId: todo.id, title: todo.name, snapshot: TodoSnapshot(todo: todo)))
                 completed += 1
             } catch {
                 failed += 1
@@ -202,9 +206,13 @@ struct BulkCancelCommand: AsyncParsableCommand {
 
         var canceled = 0
         var failed = 0
+        let batchId = UUID()
+        var undoEntries: [UndoEntry] = []
+        defer { UndoRecorder.record(undoEntries) }
         for todo in todos {
             do {
                 try await client.cancelTodo(id: todo.id)
+                undoEntries.append(UndoEntry(batchId: batchId, operation: .cancel, todoId: todo.id, title: todo.name, snapshot: TodoSnapshot(todo: todo)))
                 canceled += 1
             } catch {
                 failed += 1
@@ -287,6 +295,9 @@ struct BulkTagCommand: AsyncParsableCommand {
             }
         }
 
+        let batchId = UUID()
+        var undoEntries: [UndoEntry] = []
+        defer { UndoRecorder.record(undoEntries) }
         for todo in todos {
             let existing = todo.tags.map { $0.name }
             var merged = existing
@@ -294,6 +305,7 @@ struct BulkTagCommand: AsyncParsableCommand {
                 merged.append(tag)
             }
             try await client.updateTodo(id: todo.id, name: nil, notes: nil, deadlineDate: nil, tags: merged)
+            undoEntries.append(UndoEntry(batchId: batchId, operation: .update, todoId: todo.id, title: todo.name, snapshot: TodoSnapshot(todo: todo)))
         }
 
         print(formatter.format(message: "Updated \(todos.count) todo(s)"))
@@ -369,9 +381,13 @@ struct BulkMoveCommand: AsyncParsableCommand {
 
         var moved = 0
         var failed = 0
+        let batchId = UUID()
+        var undoEntries: [UndoEntry] = []
+        defer { UndoRecorder.record(undoEntries) }
         for todo in todos {
             do {
                 try await client.moveTodo(id: todo.id, toProject: to)
+                undoEntries.append(UndoEntry(batchId: batchId, operation: .update, todoId: todo.id, title: todo.name, snapshot: TodoSnapshot(todo: todo)))
                 moved += 1
             } catch {
                 failed += 1

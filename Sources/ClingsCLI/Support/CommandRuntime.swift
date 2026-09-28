@@ -19,10 +19,32 @@ enum CommandRuntime {
         Swift.readLine()
     }
 
+    @TaskLocal static var loadAuthToken: @Sendable () throws -> String = {
+        try AuthTokenStore.loadToken()
+    }
+
+    /// Start watching an item before a URL scheme write. The returned closure waits
+    /// until Things applies the write (see `ChangeConfirmation`).
+    @TaskLocal static var watchForChange: @Sendable (String) -> @Sendable () async -> ChangeConfirmation.Outcome = { id in
+        guard let database = try? CommandRuntime.makeDatabase(),
+              let before = try? database.modificationDate(of: id) else {
+            return { .unknown }
+        }
+        return {
+            await ChangeConfirmation.waitForChange(before: before) {
+                guard let date = try database.modificationDate(of: id) else {
+                    throw ThingsError.notFound(id)
+                }
+                return date
+            }
+        }
+    }
+
     @TaskLocal static var openURLScheme: @Sendable (String) throws -> Void = { urlString in
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        process.arguments = [urlString]
+        // -g keeps Things in the background; URL scheme writes don't need focus.
+        process.arguments = ["-g", urlString]
         do {
             try process.run()
         } catch {

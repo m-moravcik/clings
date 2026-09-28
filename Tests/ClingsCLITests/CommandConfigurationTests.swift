@@ -206,6 +206,17 @@ struct CommandConfigurationTests {
 
     @Suite("Completions Command")
     struct CompletionsCommandTests {
+        @Test(arguments: ["bash", "zsh", "fish"])
+        func scriptCoversEveryTopLevelCommand(shell: String) throws {
+            // Generated from the command tree, so new commands can't be forgotten.
+            let script = try CompletionsCommand.script(for: shell)
+            let names = Clings.configuration.subcommands.compactMap { $0.configuration.commandName }
+            #expect(!names.isEmpty)
+            for name in names {
+                #expect(script.contains(name), "\(shell) completions miss '\(name)'")
+            }
+        }
+
         @Test func configuration() {
             let config = CompletionsCommand.configuration
             #expect(config.commandName == "completions")

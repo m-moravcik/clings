@@ -7,15 +7,19 @@ import Foundation
 
 /// Manages the Things 3 auth token used for URL scheme operations (e.g., heading updates).
 public enum AuthTokenStore {
+    /// Test hook: keep the token out of the user's real config directory.
+    nonisolated(unsafe) public static var directoryOverride: URL?
+
     private static var configDir: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".config")
-            .appendingPathComponent("clings")
+        directoryOverride ?? ClingsConfig.directoryURL
     }
 
-    private static var tokenFile: URL {
+    /// Where the token lives (`~/.config/clings/auth-token` unless `CLINGS_CONFIG_DIR` is set).
+    public static var tokenFileURL: URL {
         configDir.appendingPathComponent("auth-token")
     }
+
+    private static var tokenFile: URL { tokenFileURL }
 
     /// Load the stored auth token.
     public static func loadToken() throws -> String {

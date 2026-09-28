@@ -65,6 +65,7 @@ struct CompleteCommand: AsyncParsableCommand {
                 // Exactly one match - complete it
                 let todo = openTodos[0]
                 try await client.completeTodo(id: todo.id)
+                UndoRecorder.record(.complete, todoId: todo.id, title: todo.name, snapshot: TodoSnapshot(todo: todo))
                 print(formatter.format(message: "Completed: \(todo.name)"))
 
             default:
@@ -80,7 +81,10 @@ struct CompleteCommand: AsyncParsableCommand {
             }
         } else if let todoId = id {
             // Original ID-based completion
+            let before = await UndoRecorder.snapshot(of: todoId, using: client)
             try await client.completeTodo(id: todoId)
+            UndoRecorder.record(.complete, todoId: todoId, title: before?.name ?? todoId,
+                                snapshot: before.map(TodoSnapshot.init(todo:)))
             print(formatter.format(message: "Completed todo: \(todoId)"))
         } else {
             throw ValidationError("Provide either a todo ID or --title flag")
@@ -115,7 +119,11 @@ struct ReopenCommand: AsyncParsableCommand {
 
     func run() async throws {
         let client = try ThingsClientFactory.create()
+        let before = await UndoRecorder.snapshot(of: id, using: client)
         try await client.reopenTodo(id: id)
+        if let before {
+            UndoRecorder.record(.reopen, todoId: id, title: before.name, snapshot: TodoSnapshot(todo: before))
+        }
 
         let formatter: OutputFormatter = output.json
             ? JSONOutputFormatter()
@@ -154,7 +162,10 @@ struct CancelCommand: AsyncParsableCommand {
 
     func run() async throws {
         let client = try ThingsClientFactory.create()
+        let before = await UndoRecorder.snapshot(of: id, using: client)
         try await client.cancelTodo(id: id)
+        UndoRecorder.record(.cancel, todoId: id, title: before?.name ?? id,
+                            snapshot: before.map(TodoSnapshot.init(todo:)))
 
         let formatter: OutputFormatter = output.json
             ? JSONOutputFormatter()
@@ -171,10 +182,9 @@ struct DeleteCommand: AsyncParsableCommand {
         commandName: "delete",
         abstract: "Delete a todo (moves to trash)",
         discussion: """
-        Deletes a todo by its ID. In Things 3, this is equivalent to
-        canceling the todo (there is no true "delete" in the API).
+        Moves a todo to the Trash. `clings undo` puts it back where it was.
 
-        For permanent deletion, use the Things app directly.
+        For permanent deletion, empty the Trash in the Things app.
 
         EXAMPLES:
           clings delete ABC123          Delete a specific todo
@@ -197,7 +207,11 @@ struct DeleteCommand: AsyncParsableCommand {
 
     func run() async throws {
         let client = try ThingsClientFactory.create()
+        let before = await UndoRecorder.snapshot(of: id, using: client)
         try await client.deleteTodo(id: id)
+        if let before {
+            UndoRecorder.record(.delete, todoId: id, title: before.name, snapshot: TodoSnapshot(todo: before))
+        }
 
         let formatter: OutputFormatter = output.json
             ? JSONOutputFormatter()
@@ -220,14 +234,23 @@ struct UpdateCommand: AsyncParsableCommand {
         Examples:
           clings update ABC123 --name "New title"
           clings update ABC123 --notes "Updated notes"
+          clings update ABC123 --append-notes "Follow-up: called back"
           clings update ABC123 --deadline 2024-12-25
+          clings update ABC123 --clear-deadline
           clings update ABC123 --when tomorrow
+          clings update ABC123 --when 2026-10-01@14:00      (with a reminder)
           clings update ABC123 --heading "Waiting on them"
           clings update ABC123 --project "📍 Week #12"
-          clings update ABC123 --tags work,urgent
+          clings update ABC123 --area "Work"
+          clings update ABC123 --tags work urgent
+          clings update ABC123 --add-tags waiting
           clings update ABC123 --checklist-items "Step 1" "Step 2"
           clings update ABC123 --append-checklist-items "Extra step"
           clings update ABC123 --prepend-checklist-items "First step"
+
+        Name, notes, deadline, tags and project work without a token. Everything
+        else goes through the Things URL scheme and needs an auth token
+        (clings config set-auth-token). `clings undo` restores the previous state.
         """
     )
 
@@ -237,23 +260,38 @@ struct UpdateCommand: AsyncParsableCommand {
     @Option(name: .long, help: "New title/name for the todo")
     var name: String?
 
-    @Option(name: .long, help: "New notes for the todo")
+    @Option(name: .long, help: "New notes for the todo (replaces existing)")
     var notes: String?
 
-    @Option(name: .long, help: "New deadline date (YYYY-MM-DD or 'today', 'tomorrow')")
+    @Option(name: .customLong("append-notes"), help: "Append text to the notes. Requires auth token.")
+    var appendNotes: String?
+
+    @Option(name: .customLong("prepend-notes"), help: "Prepend text to the notes. Requires auth token.")
+    var prependNotes: String?
+
+    @Option(name: .long, help: "New deadline date (YYYY-MM-DD, tomorrow, next friday, ...)")
     var deadline: String?
 
-    @Option(name: .long, help: "Schedule for a date ('today', 'tomorrow', 'evening', 'anytime', 'someday', or YYYY-MM-DD). Requires auth token.")
+    @Flag(name: .customLong("clear-deadline"), help: "Remove the deadline. Requires auth token.")
+    var clearDeadline = false
+
+    @Option(name: .long, help: "Schedule: today, evening, anytime, someday, a date, or date@HH:MM for a reminder. Requires auth token.")
     var when: String?
 
-    @Option(name: .long, help: "Move to a heading within the task's project. Requires auth token.")
+    @Option(name: .long, help: "Move to a heading within the task's project (title or ID). Requires auth token.")
     var heading: String?
 
-    @Option(name: .long, help: "Move to a different project (by name)")
+    @Option(name: .long, help: "Move to a different project (title or ID)")
     var project: String?
+
+    @Option(name: .long, help: "Move to an area (title or ID). Requires auth token.")
+    var area: String?
 
     @Option(name: .long, parsing: .upToNextOption, help: "New tags (replaces existing)")
     var tags: [String] = []
+
+    @Option(name: .customLong("add-tags"), parsing: .upToNextOption, help: "Add tags, keeping existing ones. Requires auth token.")
+    var addTags: [String] = []
 
     @Option(name: .customLong("checklist-items"), parsing: .upToNextOption, help: "Replace all checklist items. Requires auth token.")
     var checklistItems: [String] = []
@@ -267,77 +305,83 @@ struct UpdateCommand: AsyncParsableCommand {
     @OptionGroup var output: OutputOptions
 
     func run() async throws {
-        let hasChecklistUpdates = !checklistItems.isEmpty || !appendChecklistItems.isEmpty || !prependChecklistItems.isEmpty
+        try validateOptions()
 
-        // Check if any update options provided
-        guard name != nil || notes != nil || deadline != nil || when != nil || heading != nil || project != nil || !tags.isEmpty || hasChecklistUpdates else {
-            throw ThingsError.invalidState("No update options provided. Use --name, --notes, --deadline, --when, --heading, --project, --tags, --checklist-items, --append-checklist-items, or --prepend-checklist-items.")
-        }
-
-        // Validate checklist: only one mode at a time
-        let checklistModes = [!checklistItems.isEmpty, !appendChecklistItems.isEmpty, !prependChecklistItems.isEmpty].filter { $0 }.count
-        if checklistModes > 1 {
-            throw ThingsError.invalidState("Use only one of --checklist-items, --append-checklist-items, or --prepend-checklist-items at a time.")
-        }
-
-        // Validate --when value if provided
-        if let when = when {
-            let validKeywords = Set(["today", "tomorrow", "evening", "anytime", "someday"])
-            let isKeyword = validKeywords.contains(when.lowercased())
-            let isDate = parseDate(when) != nil
-            guard isKeyword || isDate else {
+        // Parse dates up front so bad input fails before anything changes.
+        let whenSpec = try when.map { value -> WhenSpec in
+            guard let spec = WhenSpec.parse(value) else {
                 throw ThingsError.invalidState(
-                    "Invalid --when value: '\(when)'. Use 'today', 'tomorrow', 'evening', 'anytime', 'someday', or YYYY-MM-DD."
+                    "Invalid --when value: '\(value)'. Use today, evening, anytime, someday, a date (YYYY-MM-DD, tomorrow, next friday) or date@HH:MM."
                 )
             }
+            return spec
         }
-
-        // Validate and trim --heading
-        let resolvedHeading: String?
-        if let heading = heading {
-            let trimmed = heading.trimmingCharacters(in: .whitespacesAndNewlines)
+        let deadlineDate = try deadline.map { value -> Date in
+            guard let day = WhenSpec.parseDay(value),
+                  let date = ThingsDateConverter.calendar.date(from: day) else {
+                throw ThingsError.invalidState("Invalid date format: \(value). Use YYYY-MM-DD, tomorrow, next friday, ...")
+            }
+            return date
+        }
+        let resolvedHeading = try heading.map { value -> String in
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else {
                 throw ThingsError.invalidState("--heading value cannot be empty")
             }
             guard !trimmed.contains(where: { $0.isNewline }) else {
                 throw ThingsError.invalidState("--heading value cannot contain newlines")
             }
-            resolvedHeading = trimmed
-        } else {
-            resolvedHeading = nil
-        }
-
-        // Pre-validate auth token before any mutations to avoid partial updates
-        let needsURLScheme = when != nil || resolvedHeading != nil || hasChecklistUpdates
-        var prevalidatedToken: String? = nil
-        if needsURLScheme {
-            do {
-                prevalidatedToken = try AuthTokenStore.loadToken()
-            } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
-                throw ThingsError.invalidState(
-                    "Things auth token required for --when/--heading/--checklist-items. Set with: clings config set-auth-token <token>"
-                )
-            } catch let error as ThingsError {
-                throw error
-            } catch {
-                throw ThingsError.operationFailed(
-                    "Failed to read auth token: \(error.localizedDescription). Try re-setting with: clings config set-auth-token <token>"
-                )
-            }
+            return trimmed
         }
 
         let client = try ThingsClientFactory.create()
+        let before = await UndoRecorder.snapshot(of: id, using: client)
 
-        // Parse deadline date if provided
-        var deadlineDate: Date? = nil
-        if let deadlineStr = deadline {
-            deadlineDate = parseDate(deadlineStr)
-            if deadlineDate == nil {
-                throw ThingsError.invalidState("Invalid date format: \(deadlineStr). Use YYYY-MM-DD, 'today', or 'tomorrow'.")
+        // URL scheme part: everything AppleScript/JXA cannot do.
+        var attributes = TodoUpdateAttributes()
+        attributes.when = whenSpec
+        attributes.appendNotes = appendNotes
+        attributes.prependNotes = prependNotes
+        attributes.addTags = addTags.isEmpty ? nil : addTags
+        if clearDeadline {
+            attributes.deadline = .clear
+        }
+        if !checklistItems.isEmpty {
+            attributes.checklist = checklistItems.map { ChecklistEntry(title: $0) }
+        } else if !appendChecklistItems.isEmpty {
+            attributes.appendChecklist = appendChecklistItems
+        } else if !prependChecklistItems.isEmpty {
+            attributes.prependChecklist = prependChecklistItems
+        }
+        // Only open the database when an ID has to be resolved.
+        let database = (area != nil || resolvedHeading != nil) ? try? CommandRuntime.makeDatabase() : nil
+        if let area {
+            if let areaId = try database?.resolveAreaId(area) {
+                attributes.listId = areaId
+            } else if database != nil {
+                throw ThingsError.notFound("Area '\(area)'")
+            } else {
+                attributes.list = area
+            }
+        }
+        if let resolvedHeading {
+            let projectId = before?.project?.id
+            if let projectId, let headingId = try database?.resolveHeadingId(resolvedHeading, projectId: projectId) {
+                attributes.headingId = headingId
+            } else {
+                attributes.heading = resolvedHeading
             }
         }
 
-        // Update via JXA (name, notes, deadline, tags)
+        // Skip what already holds: Things ignores a no-op write, which would look like a rejection.
+        if let before {
+            attributes = attributes.removingSatisfied(by: TodoSnapshot(todo: before))
+        }
+
+        // Check the token before any write so a missing token cannot leave a partial update.
+        let token = attributes.isEmpty ? nil : try AuthToken.require(for: "This update")
+
+        // JXA part (no token needed): name, notes, deadline, tags, project.
         let hasJXAUpdates = name != nil || notes != nil || deadlineDate != nil || !tags.isEmpty
         if hasJXAUpdates {
             try await client.updateTodo(
@@ -348,102 +392,66 @@ struct UpdateCommand: AsyncParsableCommand {
                 tags: tags.isEmpty ? nil : tags
             )
         }
-
-        // Move to project via JXA (separate from other updates)
-        if let projectName = project {
-            try await client.moveTodo(id: id, toProject: projectName)
+        if let project {
+            try await client.moveTodo(id: id, toProject: project)
         }
 
-        // Handle when, heading, and checklist via Things URL scheme (activationDate is read-only in JXA)
-        if needsURLScheme, let token = prevalidatedToken {
-            // Determine checklist mode
-            let checklistParam: (name: String, items: [String])?
-            if !checklistItems.isEmpty {
-                checklistParam = ("checklist-items", checklistItems)
-            } else if !appendChecklistItems.isEmpty {
-                checklistParam = ("append-checklist-items", appendChecklistItems)
-            } else if !prependChecklistItems.isEmpty {
-                checklistParam = ("prepend-checklist-items", prependChecklistItems)
-            } else {
-                checklistParam = nil
-            }
-
+        var confirmation: ChangeConfirmation.Outcome?
+        if let token {
             do {
-                try updateViaURLScheme(id: id, when: when, heading: resolvedHeading, checklist: checklistParam, token: token)
+                confirmation = try await URLSchemeWrite.perform(
+                    try ThingsURLScheme.updateTodo(id: id, attributes: attributes, authToken: token), itemId: id
+                )
             } catch {
-                if hasJXAUpdates {
-                    let jxaFields = [name != nil ? "name" : nil, notes != nil ? "notes" : nil,
-                                   deadlineDate != nil ? "deadline" : nil, !tags.isEmpty ? "tags" : nil]
-                        .compactMap { $0 }.joined(separator: ", ")
+                if hasJXAUpdates || project != nil {
                     throw ThingsError.operationFailed(
-                        "Partial update: \(jxaFields) updated, but URL scheme update failed: \(error.localizedDescription)"
+                        "Partial update: some fields were updated, but the URL scheme update failed: \(error.localizedDescription)"
                     )
                 }
                 throw error
             }
         }
 
+        if let before {
+            UndoRecorder.record(.update, todoId: id, title: before.name, snapshot: TodoSnapshot(todo: before))
+        }
+
         let formatter: OutputFormatter = output.json
             ? JSONOutputFormatter()
             : TextOutputFormatter(useColors: !output.noColor)
 
-        let projectNote = project != nil ? " (moved to project '\(project!)')" : ""
-        let urlSchemeNote = needsURLScheme ? " (URL scheme updates sent; verify in Things)" : ""
+        let projectNote = project.map { " (moved to project '\($0)')" } ?? ""
+        let urlSchemeNote = confirmation == .unknown ? " (URL scheme update sent; could not confirm it was applied)" : ""
         print(formatter.format(message: "Updated todo: \(id)\(projectNote)\(urlSchemeNote)"))
     }
 
-    private func parseDate(_ str: String) -> Date? {
-        let calendar = Calendar.current
-        let now = Date()
-        let lower = str.lowercased()
-
-        if lower == "today" {
-            return calendar.startOfDay(for: now)
-        }
-        if lower == "tomorrow" {
-            return calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now))
-        }
-
-        // Try ISO date format (YYYY-MM-DD)
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.date(from: str)
-    }
-
-    private func updateViaURLScheme(id: String, when: String?, heading: String?, checklist: (name: String, items: [String])?, token: String) throws {
-        var queryItems = [
-            URLQueryItem(name: "auth-token", value: token),
-            URLQueryItem(name: "id", value: id),
-        ]
-        if let when = when {
-            queryItems.append(URLQueryItem(name: "when", value: when.lowercased()))
-        }
-        if let heading = heading {
-            queryItems.append(URLQueryItem(name: "heading", value: heading))
-        }
-        if let checklist = checklist {
-            queryItems.append(URLQueryItem(name: checklist.name, value: checklist.items.joined(separator: "\n")))
+    private func validateOptions() throws {
+        let hasChanges = name != nil || notes != nil || appendNotes != nil || prependNotes != nil
+            || deadline != nil || clearDeadline || when != nil || heading != nil || project != nil
+            || area != nil || !tags.isEmpty || !addTags.isEmpty || !checklistItems.isEmpty
+            || !appendChecklistItems.isEmpty || !prependChecklistItems.isEmpty
+        guard hasChanges else {
+            throw ThingsError.invalidState(
+                "No update options provided. Use --name, --notes, --append-notes, --prepend-notes, --deadline, --clear-deadline, --when, --heading, --project, --area, --tags, --add-tags or the checklist options."
+            )
         }
 
-        guard var components = URLComponents(string: "things:///update") else {
-            throw ThingsError.operationFailed("Internal error: failed to parse Things URL base")
+        let checklistModes = [!checklistItems.isEmpty, !appendChecklistItems.isEmpty, !prependChecklistItems.isEmpty]
+            .filter { $0 }.count
+        if checklistModes > 1 {
+            throw ThingsError.invalidState("Use only one of --checklist-items, --append-checklist-items, or --prepend-checklist-items at a time.")
         }
-        components.queryItems = queryItems
-        guard let url = components.url?.absoluteString else {
-            throw ThingsError.operationFailed("Failed to construct Things URL")
+        if deadline != nil && clearDeadline {
+            throw ThingsError.invalidState("Use either --deadline or --clear-deadline, not both.")
         }
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        process.arguments = [url]
-        do {
-            try process.run()
-        } catch {
-            throw ThingsError.operationFailed("Failed to launch Things URL scheme handler: \(error.localizedDescription)")
+        if notes != nil && (appendNotes != nil || prependNotes != nil) {
+            throw ThingsError.invalidState("--notes replaces the notes; don't combine it with --append-notes or --prepend-notes.")
         }
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else {
-            throw ThingsError.operationFailed("Failed to update via Things URL scheme (exit code \(process.terminationStatus))")
+        if !tags.isEmpty && !addTags.isEmpty {
+            throw ThingsError.invalidState("--tags replaces all tags; don't combine it with --add-tags.")
+        }
+        if project != nil && area != nil {
+            throw ThingsError.invalidState("A todo lives in either a project or an area; use --project or --area.")
         }
     }
 }

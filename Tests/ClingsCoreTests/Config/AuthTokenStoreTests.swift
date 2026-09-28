@@ -7,105 +7,99 @@ import Foundation
 import Testing
 @testable import ClingsCore
 
-/// Tests for AuthTokenStore. All tests that mutate the token file
-/// save and restore the original value to avoid clobbering real config.
+/// Tests for AuthTokenStore. Every test points the store at a temporary directory,
+/// so the user's real ~/.config/clings/auth-token is never read or written.
 @Suite("AuthTokenStore", .serialized)
 struct AuthTokenStoreTests {
 
-    private static let tokenPath = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent(".config/clings/auth-token")
-
-    /// Read the current token file contents (raw bytes), or nil if missing.
-    private static func backupToken() -> Data? {
-        try? Data(contentsOf: tokenPath)
+    /// Run `body` with the token store redirected to a fresh temporary directory.
+    static func withTemporaryStore(_ body: (URL) throws -> Void) throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("clings-token-\(UUID().uuidString)")
+        AuthTokenStore.directoryOverride = directory
+        defer {
+            AuthTokenStore.directoryOverride = nil
+            try? FileManager.default.removeItem(at: directory)
+        }
+        try body(directory.appendingPathComponent("auth-token"))
     }
 
-    /// Restore the token file to its previous state.
-    private static func restoreToken(_ backup: Data?) {
-        if let backup = backup {
-            try? backup.write(to: tokenPath)
-            // Re-enforce 0600 permissions
-            let fd = open(tokenPath.path, O_WRONLY, 0o600)
-            if fd >= 0 {
-                fchmod(fd, 0o600)
-                close(fd)
-            }
-        } else {
-            try? FileManager.default.removeItem(at: tokenPath)
+    @Test func usesOverrideDirectory() throws {
+        try Self.withTemporaryStore { tokenPath in
+            #expect(AuthTokenStore.tokenFileURL == tokenPath)
+            #expect(!AuthTokenStore.tokenFileURL.path.hasPrefix(
+                FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".config").path
+            ))
         }
     }
 
     @Suite("saveToken validation")
     struct SaveTokenValidation {
-        @Test func rejectsEmptyToken() {
-            #expect(throws: (any Error).self) {
-                try AuthTokenStore.saveToken("")
+        @Test func rejectsEmptyToken() throws {
+            try AuthTokenStoreTests.withTemporaryStore { _ in
+                #expect(throws: (any Error).self) {
+                    try AuthTokenStore.saveToken("")
+                }
             }
         }
 
-        @Test func rejectsWhitespaceOnlyToken() {
-            #expect(throws: (any Error).self) {
-                try AuthTokenStore.saveToken("   \n\t  ")
+        @Test func rejectsWhitespaceOnlyToken() throws {
+            try AuthTokenStoreTests.withTemporaryStore { _ in
+                #expect(throws: (any Error).self) {
+                    try AuthTokenStore.saveToken("   \n\t  ")
+                }
             }
         }
     }
 
-    @Suite("saveToken and loadToken round-trip", .serialized)
+    @Suite("saveToken and loadToken round-trip")
     struct RoundTrip {
         @Test func savesAndLoadsToken() throws {
-            let backup = AuthTokenStoreTests.backupToken()
-            defer { AuthTokenStoreTests.restoreToken(backup) }
-
-            let testToken = "test-token-\(UUID().uuidString)"
-            try AuthTokenStore.saveToken(testToken)
-            let loaded = try AuthTokenStore.loadToken()
-            #expect(loaded == testToken)
+            try AuthTokenStoreTests.withTemporaryStore { _ in
+                let testToken = "test-token-\(UUID().uuidString)"
+                try AuthTokenStore.saveToken(testToken)
+                #expect(try AuthTokenStore.loadToken() == testToken)
+            }
         }
 
         @Test func trimsWhitespace() throws {
-            let backup = AuthTokenStoreTests.backupToken()
-            defer { AuthTokenStoreTests.restoreToken(backup) }
-
-            let core = "trimmed-token-\(UUID().uuidString)"
-            let testToken = "  \(core)  \n"
-            try AuthTokenStore.saveToken(testToken)
-            let loaded = try AuthTokenStore.loadToken()
-            #expect(loaded == core)
+            try AuthTokenStoreTests.withTemporaryStore { _ in
+                let core = "trimmed-token-\(UUID().uuidString)"
+                try AuthTokenStore.saveToken("  \(core)  \n")
+                #expect(try AuthTokenStore.loadToken() == core)
+            }
         }
 
         @Test func setsRestrictedPermissions() throws {
-            let backup = AuthTokenStoreTests.backupToken()
-            defer { AuthTokenStoreTests.restoreToken(backup) }
-
-            try AuthTokenStore.saveToken("perm-test-\(UUID().uuidString)")
-            let attrs = try FileManager.default.attributesOfItem(atPath: AuthTokenStoreTests.tokenPath.path)
-            let perms = (attrs[.posixPermissions] as? Int) ?? 0
-            #expect(perms == 0o600)
+            try AuthTokenStoreTests.withTemporaryStore { tokenPath in
+                try AuthTokenStore.saveToken("perm-test-\(UUID().uuidString)")
+                let attrs = try FileManager.default.attributesOfItem(atPath: tokenPath.path)
+                #expect((attrs[.posixPermissions] as? Int) == 0o600)
+            }
         }
 
         @Test func overwritesPreviousToken() throws {
-            let backup = AuthTokenStoreTests.backupToken()
-            defer { AuthTokenStoreTests.restoreToken(backup) }
-
-            let first = "first-\(UUID().uuidString)"
-            let second = "second-\(UUID().uuidString)"
-            try AuthTokenStore.saveToken(first)
-            try AuthTokenStore.saveToken(second)
-            let loaded = try AuthTokenStore.loadToken()
-            #expect(loaded == second)
+            try AuthTokenStoreTests.withTemporaryStore { _ in
+                let second = "second-\(UUID().uuidString)"
+                try AuthTokenStore.saveToken("first-\(UUID().uuidString)")
+                try AuthTokenStore.saveToken(second)
+                #expect(try AuthTokenStore.loadToken() == second)
+            }
         }
     }
 
     @Suite("loadToken errors")
     struct LoadTokenErrors {
         @Test func throwsWhenTokenFileIsEmpty() throws {
-            let backup = AuthTokenStoreTests.backupToken()
-            defer { AuthTokenStoreTests.restoreToken(backup) }
-
-            // Write an empty file (bypassing saveToken which rejects empty)
-            try Data().write(to: AuthTokenStoreTests.tokenPath)
-            #expect(throws: (any Error).self) {
-                _ = try AuthTokenStore.loadToken()
+            try AuthTokenStoreTests.withTemporaryStore { tokenPath in
+                // Write an empty file (bypassing saveToken which rejects empty)
+                try FileManager.default.createDirectory(
+                    at: tokenPath.deletingLastPathComponent(), withIntermediateDirectories: true
+                )
+                try Data().write(to: tokenPath)
+                #expect(throws: (any Error).self) {
+                    _ = try AuthTokenStore.loadToken()
+                }
             }
         }
     }

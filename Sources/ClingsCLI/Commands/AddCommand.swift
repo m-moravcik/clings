@@ -15,9 +15,18 @@ struct AddCommand: AsyncParsableCommand {
         Supports natural language patterns:
           clings add "Buy milk tomorrow #errands"
           clings add "Call mom by friday !!"
-          clings add "Review docs for ProjectName"
+          clings add "Review docs @ProjectName"
           clings add "Task // notes go here"
           clings add "Task - checklist item 1 - checklist item 2"
+
+        --when accepts today, evening, anytime, someday, a date (2026-11-15,
+        tomorrow, next friday) and an optional reminder time (2026-11-15@14:00).
+        --project, --area and --heading accept a title or an ID.
+
+        Evening, reminder times, headings and checklist items are applied with a
+        Things URL scheme update and need an auth token (clings config set-auth-token).
+
+        Prints the new todo's ID; `clings undo` removes it again.
         """
     )
 
@@ -27,22 +36,22 @@ struct AddCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Add notes to the todo")
     var notes: String?
 
-    @Option(name: .long, help: "Set the when date (today, tomorrow, etc.)")
+    @Option(name: .long, help: "When: today, evening, anytime, someday, a date, or date@HH:MM for a reminder")
     var when: String?
 
-    @Option(name: .long, help: "Set the deadline")
+    @Option(name: .long, help: "Deadline date (YYYY-MM-DD, tomorrow, next friday, ...)")
     var deadline: String?
 
     @Option(name: .long, parsing: .upToNextOption, help: "Add tags")
     var tags: [String] = []
 
-    @Option(name: .long, help: "Add to a project")
+    @Option(name: .long, help: "Add to a project (title or ID)")
     var project: String?
 
-    @Option(name: .long, help: "Add to an area")
+    @Option(name: .long, help: "Add to an area (title or ID)")
     var area: String?
 
-    @Option(name: .long, help: "Add under a heading within the project (uses URL scheme)")
+    @Option(name: .long, help: "Add under a heading within the project (title or ID; requires auth token)")
     var heading: String?
 
     @Flag(name: .long, help: "Show parsed result without creating todo")
@@ -67,11 +76,25 @@ struct AddCommand: AsyncParsableCommand {
         if let area = area {
             parsed.area = area
         }
+
+        // Reject unparseable dates instead of silently dropping them.
+        var whenSpec: WhenSpec? = parsed.whenDate.map { .day(Self.day(of: $0)) }
         if let when = when {
-            parsed.whenDate = parseSimpleDate(when)
+            guard let spec = WhenSpec.parse(when) else {
+                throw ThingsError.invalidState(
+                    "Invalid --when value: '\(when)'. Use today, evening, anytime, someday, a date (YYYY-MM-DD, tomorrow, next friday) or date@HH:MM."
+                )
+            }
+            whenSpec = spec
+            parsed.whenDate = spec.scheduledDay().flatMap { ThingsDateConverter.calendar.date(from: $0) }
         }
         if let deadline = deadline {
-            parsed.deadlineDate = parseSimpleDate(deadline)
+            guard let day = WhenSpec.parseDay(deadline) else {
+                throw ThingsError.invalidState(
+                    "Invalid --deadline value: '\(deadline)'. Use YYYY-MM-DD, tomorrow, next friday, ..."
+                )
+            }
+            parsed.deadlineDate = ThingsDateConverter.calendar.date(from: day)
         }
 
         // Handle parse-only mode
@@ -80,6 +103,16 @@ struct AddCommand: AsyncParsableCommand {
             return
         }
 
+        let client = try ThingsClientFactory.create()
+
+        // Everything AppleScript cannot set is applied afterwards in one URL update.
+        var followUp = TodoUpdateAttributes()
+        if let whenSpec, whenSpec.requiresURLScheme {
+            followUp.when = whenSpec
+        }
+        if !parsed.checklistItems.isEmpty {
+            followUp.checklist = parsed.checklistItems.map { ChecklistEntry(title: $0) }
+        }
         if let heading = heading {
             // Headings live inside a project; a heading without a project is meaningless.
             guard let headingProject = parsed.project else {
@@ -87,32 +120,55 @@ struct AddCommand: AsyncParsableCommand {
                     "--heading requires a project. Use --project \"<name>\" together with --heading."
                 )
             }
-            // Validate the heading exists before firing the URL scheme: Things silently
-            // drops the heading parameter when it doesn't match, dropping the todo into
-            // the project root instead. Surfacing this up front avoids a confusing no-op.
-            let client = try ThingsClientFactory.create()
-            try await AddCommand.validateHeadingExists(heading, inProject: headingProject, using: client)
-            // Heading requires URL scheme (no auth token needed)
-            try addViaURLScheme(parsed: parsed, heading: heading)
-        } else {
-            let client = try ThingsClientFactory.create()
-            _ = try await client.createTodo(
-                name: parsed.title,
-                notes: parsed.notes,
-                when: parsed.whenDate,
-                deadline: parsed.deadlineDate,
-                tags: parsed.tags,
-                project: parsed.project,
-                area: parsed.area,
-                checklistItems: parsed.checklistItems
+            let match = try await AddCommand.validateHeadingExists(heading, inProject: headingProject, using: client)
+            if let match {
+                followUp.headingId = match.id
+            } else {
+                followUp.heading = heading
+            }
+        }
+
+        // Check the token before creating anything so a failure leaves nothing half-done.
+        let token = followUp.isEmpty ? nil : try AuthToken.require(for: "Evening, reminder times, headings and checklists")
+
+        let id = try await client.createTodo(
+            name: parsed.title,
+            notes: parsed.notes,
+            when: parsed.whenDate,
+            deadline: parsed.deadlineDate,
+            tags: parsed.tags,
+            project: parsed.project,
+            area: parsed.area,
+            checklistItems: []
+        )
+        UndoRecorder.record(.create, todoId: id, title: parsed.title, snapshot: nil)
+
+        do {
+            switch whenSpec {
+            case .someday:
+                try await client.moveTodoToList(id: id, list: "Someday")
+            case .anytime:
+                try await client.moveTodoToList(id: id, list: "Anytime")
+            default:
+                break
+            }
+            if let token {
+                try await URLSchemeWrite.perform(
+                    try ThingsURLScheme.updateTodo(id: id, attributes: followUp, authToken: token),
+                    itemId: id
+                )
+            }
+        } catch {
+            throw ThingsError.operationFailed(
+                "Created \(id) but could not finish setting it up: \(error.localizedDescription)"
             )
         }
 
-        let outputFormatter: OutputFormatter = output.json
-            ? JSONOutputFormatter()
-            : TextOutputFormatter(useColors: !output.noColor)
+        MutationOutput.print(message: "Created: \(parsed.title) (\(id))", id: id, output: output)
+    }
 
-        print(outputFormatter.format(message: "Created: \(parsed.title)"))
+    private static func day(of date: Date) -> DateComponents {
+        ThingsDateConverter.calendar.dateComponents([.year, .month, .day], from: date)
     }
 
     /// Verify that `heading` exists in `project` before relying on the URL scheme.
@@ -123,11 +179,12 @@ struct AddCommand: AsyncParsableCommand {
     /// with a warning rather than blocking the operation.
     ///
     /// Static and client-injected so it can be unit tested without launching Things.
+    @discardableResult
     static func validateHeadingExists(
         _ heading: String,
         inProject project: String,
         using client: any ThingsClientProtocol
-    ) async throws {
+    ) async throws -> Heading? {
         let headings: [Heading]
         do {
             headings = try await client.fetchHeadings(projectId: project)
@@ -136,11 +193,10 @@ struct AddCommand: AsyncParsableCommand {
             FileHandle.standardError.write(Data(
                 "Warning: cannot verify heading '\(heading)' (database unavailable); proceeding.\n".utf8
             ))
-            return
+            return nil
         }
 
-        let matched = headings.contains { $0.title == heading }
-        guard matched else {
+        guard let matched = headings.first(where: { $0.title == heading || $0.id == heading }) else {
             let available = headings.isEmpty
                 ? "Project has no headings."
                 : "Available headings: \(headings.map { "\"\($0.title)\"" }.joined(separator: ", "))."
@@ -154,70 +210,7 @@ struct AddCommand: AsyncParsableCommand {
                 """
             )
         }
-    }
-
-    private func addViaURLScheme(parsed: ParsedTask, heading: String?) throws {
-        var queryItems = [URLQueryItem(name: "title", value: parsed.title)]
-
-        if let heading = heading {
-            queryItems.append(URLQueryItem(name: "heading", value: heading))
-        }
-        if let notes = parsed.notes {
-            queryItems.append(URLQueryItem(name: "notes", value: notes))
-        }
-        if let project = parsed.project {
-            queryItems.append(URLQueryItem(name: "list", value: project))
-        }
-        if let area = parsed.area {
-            queryItems.append(URLQueryItem(name: "list", value: area))
-        }
-        if let whenDate = parsed.whenDate {
-            let formatter = DateFormatter()
-            formatter.dateFormat = "yyyy-MM-dd"
-            queryItems.append(URLQueryItem(name: "when", value: formatter.string(from: whenDate)))
-        }
-        if let deadlineDate = parsed.deadlineDate {
-            let formatter = DateFormatter()
-            formatter.dateFormat = "yyyy-MM-dd"
-            queryItems.append(URLQueryItem(name: "deadline", value: formatter.string(from: deadlineDate)))
-        }
-        if !parsed.tags.isEmpty {
-            queryItems.append(URLQueryItem(name: "tags", value: parsed.tags.joined(separator: ",")))
-        }
-        if !parsed.checklistItems.isEmpty {
-            queryItems.append(URLQueryItem(name: "checklist-items", value: parsed.checklistItems.joined(separator: "\n")))
-        }
-
-        guard var components = URLComponents(string: "things:///add") else {
-            throw ThingsError.operationFailed("Internal error: failed to parse Things URL base")
-        }
-        components.queryItems = queryItems
-        guard let url = components.url?.absoluteString else {
-            throw ThingsError.operationFailed("Failed to construct Things URL")
-        }
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        process.arguments = [url]
-        try process.run()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else {
-            throw ThingsError.operationFailed("Failed to add via Things URL scheme (exit code \(process.terminationStatus))")
-        }
-    }
-
-    private func parseSimpleDate(_ str: String) -> Date? {
-        let calendar = Calendar.current
-        let now = Date()
-        let lower = str.lowercased()
-
-        if lower == "today" {
-            return calendar.startOfDay(for: now)
-        }
-        if lower == "tomorrow" {
-            return calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now))
-        }
-        return nil
+        return matched
     }
 
     private func printParsedResult(_ parsed: ParsedTask) {

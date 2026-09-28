@@ -185,11 +185,20 @@ struct ProjectUpdateCommand: AsyncParsableCommand {
         Update one or more properties of a project by ID.
         Only specified options will be updated.
 
+        Name, notes, deadline and tags work without a token. Scheduling, moving
+        to another area, appending notes, adding tags and clearing the deadline go
+        through the Things URL scheme and need an auth token.
+
         EXAMPLES:
           clings project update <uuid> --name "New Title"
           clings project update <uuid> --notes "Updated notes"
+          clings project update <uuid> --append-notes "Status: on hold"
           clings project update <uuid> --deadline 2025-06-01
-          clings project update <uuid> --tags work,planning
+          clings project update <uuid> --clear-deadline
+          clings project update <uuid> --when someday
+          clings project update <uuid> --area "Work"
+          clings project update <uuid> --tags work planning
+          clings project update <uuid> --add-tags waiting
         """
     )
 
@@ -199,62 +208,105 @@ struct ProjectUpdateCommand: AsyncParsableCommand {
     @Option(name: .long, help: "New name for the project")
     var name: String?
 
-    @Option(name: .long, help: "New notes for the project")
+    @Option(name: .long, help: "New notes for the project (replaces existing)")
     var notes: String?
 
-    @Option(name: .long, help: "New deadline date (YYYY-MM-DD or 'today', 'tomorrow')")
+    @Option(name: .customLong("append-notes"), help: "Append text to the notes. Requires auth token.")
+    var appendNotes: String?
+
+    @Option(name: .customLong("prepend-notes"), help: "Prepend text to the notes. Requires auth token.")
+    var prependNotes: String?
+
+    @Option(name: .long, help: "New deadline date (YYYY-MM-DD, tomorrow, next friday, ...)")
     var deadline: String?
+
+    @Flag(name: .customLong("clear-deadline"), help: "Remove the deadline. Requires auth token.")
+    var clearDeadline = false
+
+    @Option(name: .long, help: "Schedule: today, evening, anytime, someday or a date. Requires auth token.")
+    var when: String?
+
+    @Option(name: .long, help: "Move to an area (title or ID). Requires auth token.")
+    var area: String?
 
     @Option(name: .long, parsing: .upToNextOption, help: "New tags (replaces existing)")
     var tags: [String] = []
 
+    @Option(name: .customLong("add-tags"), parsing: .upToNextOption, help: "Add tags, keeping existing ones. Requires auth token.")
+    var addTags: [String] = []
+
     @OptionGroup var output: OutputOptions
 
     func run() async throws {
-        guard name != nil || notes != nil || deadline != nil || !tags.isEmpty else {
-            throw ThingsError.invalidState("No update options provided. Use --name, --notes, --deadline, or --tags.")
+        let hasChanges = name != nil || notes != nil || appendNotes != nil || prependNotes != nil
+            || deadline != nil || clearDeadline || when != nil || area != nil || !tags.isEmpty || !addTags.isEmpty
+        guard hasChanges else {
+            throw ThingsError.invalidState(
+                "No update options provided. Use --name, --notes, --append-notes, --prepend-notes, --deadline, --clear-deadline, --when, --area, --tags or --add-tags."
+            )
         }
+        if deadline != nil && clearDeadline {
+            throw ThingsError.invalidState("Use either --deadline or --clear-deadline, not both.")
+        }
+        if notes != nil && (appendNotes != nil || prependNotes != nil) {
+            throw ThingsError.invalidState("--notes replaces the notes; don't combine it with --append-notes or --prepend-notes.")
+        }
+        if !tags.isEmpty && !addTags.isEmpty {
+            throw ThingsError.invalidState("--tags replaces all tags; don't combine it with --add-tags.")
+        }
+
+        let deadlineDate = try deadline.map { value -> Date in
+            guard let day = WhenSpec.parseDay(value),
+                  let date = ThingsDateConverter.calendar.date(from: day) else {
+                throw ThingsError.invalidState("Invalid date format: \(value). Use YYYY-MM-DD, tomorrow, next friday, ...")
+            }
+            return date
+        }
+
+        var attributes = ProjectUpdateAttributes()
+        attributes.appendNotes = appendNotes
+        attributes.prependNotes = prependNotes
+        attributes.addTags = addTags.isEmpty ? nil : addTags
+        if clearDeadline {
+            attributes.deadline = .clear
+        }
+        if let when {
+            guard let spec = WhenSpec.parse(when), !spec.isReminder else {
+                throw ThingsError.invalidState(
+                    "Invalid --when value: '\(when)'. Use today, evening, anytime, someday or a date."
+                )
+            }
+            attributes.when = spec
+        }
+        if let area {
+            guard let areaId = try CommandRuntime.makeDatabase().resolveAreaId(area) else {
+                throw ThingsError.notFound("Area '\(area)'")
+            }
+            attributes.areaId = areaId
+        }
+        let token = attributes.isEmpty ? nil : try AuthToken.require(for: "This project update")
 
         let client = try ThingsClientFactory.create()
-
-        var deadlineDate: Date? = nil
-        if let deadlineStr = deadline {
-            deadlineDate = parseDate(deadlineStr)
-            if deadlineDate == nil {
-                throw ThingsError.invalidState("Invalid date format: \(deadlineStr). Use YYYY-MM-DD, 'today', or 'tomorrow'.")
-            }
+        if name != nil || notes != nil || deadlineDate != nil || !tags.isEmpty {
+            try await client.updateProject(
+                id: id,
+                name: name,
+                notes: notes,
+                deadlineDate: deadlineDate,
+                tags: tags.isEmpty ? nil : tags
+            )
         }
-
-        try await client.updateProject(
-            id: id,
-            name: name,
-            notes: notes,
-            deadlineDate: deadlineDate,
-            tags: tags.isEmpty ? nil : tags
-        )
+        if let token {
+            try await URLSchemeWrite.perform(
+                try ThingsURLScheme.updateProject(id: id, attributes: attributes, authToken: token), itemId: id
+            )
+        }
 
         let formatter: OutputFormatter = output.json
             ? JSONOutputFormatter()
             : TextOutputFormatter(useColors: !output.noColor)
 
         print(formatter.format(message: "Updated project: \(id)"))
-    }
-
-    private func parseDate(_ str: String) -> Date? {
-        let calendar = Calendar.current
-        let now = Date()
-        let lower = str.lowercased()
-
-        if lower == "today" {
-            return calendar.startOfDay(for: now)
-        }
-        if lower == "tomorrow" {
-            return calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now))
-        }
-
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.date(from: str)
     }
 }
 

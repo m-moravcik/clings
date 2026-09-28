@@ -5,6 +5,20 @@
 
 import Foundation
 
+/// Refers to a Things project or area either by ID or by title.
+public enum ThingsItemRef: Equatable, Sendable {
+    case id(String)
+    case name(String)
+
+    /// AppleScript specifier such as `project id "X"` or `area "Work"`.
+    func appleScriptSpecifier(_ className: String) -> String {
+        switch self {
+        case .id(let id): return "\(className) id \"\(id.appleScriptEscaped)\""
+        case .name(let name): return "\(className) \"\(name.appleScriptEscaped)\""
+        }
+    }
+}
+
 /// JavaScript for Automation (JXA) script templates for Things 3.
 public enum JXAScripts {
 
@@ -255,25 +269,30 @@ public enum JXAScripts {
         """
     }
 
-    /// Delete a todo by ID (moves to Trash).
-    public static func deleteTodo(id: String) -> String {
+    /// Move a todo to the Trash via AppleScript (JXA has no working delete).
+    /// `delete` fails with -1728 for completed or canceled todos; moving to the
+    /// Trash list works for every status.
+    public static func trashTodoAppleScript(id: String) -> String {
         """
-        (() => {
-            const app = Application('Things3');
-            const todo = app.toDos.byId('\(id.jxaEscaped)');
-
-            if (!todo.exists()) {
-                return JSON.stringify({ success: false, error: 'Todo not found' });
-            }
-
-            // Things 3 doesn't have a direct delete, we cancel it
-            todo.status = 'canceled';
-            return JSON.stringify({ success: true, id: '\(id.jxaEscaped)' });
-        })()
+        tell application "Things3"
+            move to do id "\(id.appleScriptEscaped)" to list "Trash"
+            return "ok"
+        end tell
         """
     }
 
-    /// Move a todo to a project.
+    /// Move a todo to a built-in list ("Inbox", "Anytime", "Someday").
+    /// Also restores a todo from the Trash; moving to Inbox detaches it from its project.
+    public static func moveTodoToListAppleScript(id: String, list: String) -> String {
+        """
+        tell application "Things3"
+            move to do id "\(id.appleScriptEscaped)" to list "\(list.appleScriptEscaped)"
+            return "ok"
+        end tell
+        """
+    }
+
+    /// Move a todo to a project (by ID or title).
     public static func moveTodo(id: String, toProject projectName: String) -> String {
         """
         (() => {
@@ -284,7 +303,11 @@ public enum JXAScripts {
                 return JSON.stringify({ success: false, error: 'Todo not found' });
             }
 
-            const project = app.projects.byName('\(projectName.jxaEscaped)');
+            // Accept a project ID or title; IDs are unambiguous when titles repeat.
+            let project = app.projects.byId('\(projectName.jxaEscaped)');
+            if (!project.exists()) {
+                project = app.projects.byName('\(projectName.jxaEscaped)');
+            }
             if (!project.exists()) {
                 return JSON.stringify({ success: false, error: 'Project not found: \(projectName.jxaEscaped)' });
             }
@@ -355,14 +378,16 @@ public enum JXAScripts {
 
     /// Create a new todo via AppleScript (JXA `make` throws -2710 in Things 3).
     /// Returns the ID of the created todo.
+    ///
+    /// Checklist items, headings, evening and reminder times cannot be set through
+    /// AppleScript; callers apply them afterwards with a URL scheme update.
     public static func createTodoAppleScript(
         name: String,
         notes: String? = nil,
         when: Date? = nil,
         deadline: Date? = nil,
-        project: String? = nil,
-        area: String? = nil,
-        checklistItems: [String] = []
+        project: ThingsItemRef? = nil,
+        area: ThingsItemRef? = nil
     ) -> String {
         var propsList = ["name:\"\(name.appleScriptEscaped)\""]
         if let notes = notes {
@@ -373,26 +398,22 @@ public enum JXAScripts {
         lines.append("tell application \"Things3\"")
         lines.append("    set newTodo to make new to do with properties {\(propsList.joined(separator: ", "))}")
 
-        if let when = when {
-            lines.append(contentsOf: dateSettingLines(property: "activation date", of: "newTodo", date: when, tempVar: "whenDate"))
-        }
-        if let deadline = deadline {
-            lines.append(contentsOf: dateSettingLines(property: "due date", of: "newTodo", date: deadline, tempVar: "deadlineDate"))
-        }
+        // Assignment errors propagate on purpose: a missing project must not
+        // silently leave the todo in the Inbox.
         if let project = project {
-            lines.append("    try")
-            lines.append("        set project of newTodo to project \"\(project.appleScriptEscaped)\"")
-            lines.append("    end try")
+            lines.append("    set project of newTodo to \(project.appleScriptSpecifier("project"))")
         }
         if let area = area {
-            lines.append("    try")
-            lines.append("        set area of newTodo to area \"\(area.appleScriptEscaped)\"")
-            lines.append("    end try")
+            lines.append("    set area of newTodo to \(area.appleScriptSpecifier("area"))")
         }
-        for item in checklistItems {
-            lines.append("    tell newTodo")
-            lines.append("        make new to do with properties {name:\"\(item.appleScriptEscaped)\"}")
-            lines.append("    end tell")
+        if let when = when {
+            // `activation date` is read-only; `schedule` is the supported way to set it.
+            lines.append(contentsOf: dateBuildingLines(date: when, variable: "whenDate"))
+            lines.append("    schedule newTodo for whenDate")
+        }
+        if let deadline = deadline {
+            lines.append(contentsOf: dateBuildingLines(date: deadline, variable: "deadlineDate"))
+            lines.append("    set due date of newTodo to deadlineDate")
         }
 
         lines.append("    return id of newTodo")
@@ -401,19 +422,19 @@ public enum JXAScripts {
         return lines.joined(separator: "\n")
     }
 
-    /// Generate AppleScript lines to set a date property from a Swift Date.
-    private static func dateSettingLines(property: String, of variable: String, date: Date, tempVar: String) -> [String] {
-        let calendar = Calendar.current
-        let y = calendar.component(.year, from: date)
-        let m = calendar.component(.month, from: date)
-        let d = calendar.component(.day, from: date)
+    /// Generate AppleScript lines that build a local-midnight date in `variable`.
+    ///
+    /// The day is reset to 1 before the month changes: starting from Oct 31,
+    /// setting month 11 first would yield Nov 31, which AppleScript rolls to Dec 1.
+    private static func dateBuildingLines(date: Date, variable: String) -> [String] {
+        let components = ThingsDateConverter.calendar.dateComponents([.year, .month, .day], from: date)
         return [
-            "    set \(tempVar) to current date",
-            "    set year of \(tempVar) to \(y)",
-            "    set month of \(tempVar) to \(m)",
-            "    set day of \(tempVar) to \(d)",
-            "    set time of \(tempVar) to 0",
-            "    set \(property) of \(variable) to \(tempVar)",
+            "    set \(variable) to current date",
+            "    set day of \(variable) to 1",
+            "    set year of \(variable) to \(components.year ?? 0)",
+            "    set month of \(variable) to \(components.month ?? 1)",
+            "    set day of \(variable) to \(components.day ?? 1)",
+            "    set time of \(variable) to 0",
         ]
     }
 
@@ -548,32 +569,33 @@ public enum JXAScripts {
         """
     }
 
-    /// Set tag names for a todo via AppleScript.
-    public static func setTodoTagsAppleScript(id: String, tags: [String]) -> String {
-        let tagList = tags.map { "\"\($0.appleScriptEscaped)\"" }.joined(separator: ", ")
-
-        return """
-        tell application "Things3"
-            set tagNames to {\(tagList)}
-            repeat with tagName in tagNames
-                if not (exists tag tagName) then
-                    make new tag with properties {name: tagName}
-                end if
-            end repeat
-            set tagNamesStr to tagNames as string
-            set theTodo to to do id "\(id.appleScriptEscaped)"
-            if not (exists theTodo) then
-                error "Todo not found: \(id.appleScriptEscaped)"
-            end if
-            set tag names of theTodo to tagNamesStr
-            return "ok"
-        end tell
-        """
+    /// Split comma-separated arguments, trim, drop empties and duplicates (order kept).
+    static func normalizedTags(_ tags: [String]) -> [String] {
+        var seen = Set<String>()
+        return tags
+            .flatMap { $0.split(separator: ",") }
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && seen.insert($0).inserted }
     }
 
-    /// Set tag names for a project via AppleScript.
+    /// Set tag names for a todo via AppleScript. An empty list clears all tags.
+    public static func setTodoTagsAppleScript(id: String, tags: [String]) -> String {
+        setTagsAppleScript(tags: tags, itemClass: "to do", itemId: id, variable: "theTodo", label: "Todo")
+    }
+
+    /// Set tag names for a project via AppleScript. An empty list clears all tags.
     public static func setProjectTagsAppleScript(id: String, tags: [String]) -> String {
-        let tagList = tags.map { "\"\($0.appleScriptEscaped)\"" }.joined(separator: ", ")
+        setTagsAppleScript(tags: tags, itemClass: "project", itemId: id, variable: "theProject", label: "Project")
+    }
+
+    /// `tag names` is one comma-separated string. It is built here rather than with
+    /// `list as string`, which concatenates without separators ("a" + "b" -> "ab")
+    /// and makes Things create a junk tag.
+    private static func setTagsAppleScript(tags: [String], itemClass: String, itemId: String,
+                                           variable: String, label: String) -> String {
+        let names = normalizedTags(tags)
+        let tagList = names.map { "\"\($0.appleScriptEscaped)\"" }.joined(separator: ", ")
+        let tagNames = names.joined(separator: ", ").appleScriptEscaped
 
         return """
         tell application "Things3"
@@ -583,12 +605,11 @@ public enum JXAScripts {
                     make new tag with properties {name: tagName}
                 end if
             end repeat
-            set tagNamesStr to tagNames as string
-            set theProject to project id "\(id.appleScriptEscaped)"
-            if not (exists theProject) then
-                error "Project not found: \(id.appleScriptEscaped)"
+            set \(variable) to \(itemClass) id "\(itemId.appleScriptEscaped)"
+            if not (exists \(variable)) then
+                error "\(label) not found: \(itemId.appleScriptEscaped)"
             end if
-            set tag names of theProject to tagNamesStr
+            set tag names of \(variable) to "\(tagNames)"
             return "ok"
         end tell
         """

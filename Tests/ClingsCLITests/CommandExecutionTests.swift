@@ -11,7 +11,7 @@ import Testing
 // MARK: - Test Mock
 
 /// Lightweight mock for command execution tests.
-private final class CommandMock: ThingsClientProtocol, @unchecked Sendable {
+final class CommandMock: ThingsClientProtocol, @unchecked Sendable {
     var todosForList: [ListView: [Todo]] = [:]
     var todoById: [String: Todo] = [:]
     var searchResults: [Todo] = []
@@ -25,8 +25,14 @@ private final class CommandMock: ThingsClientProtocol, @unchecked Sendable {
     private(set) var canceledIds: [String] = []
     private(set) var reopenedIds: [String] = []
     private(set) var deletedIds: [String] = []
+    private(set) var movedToList: [(id: String, list: String)] = []
     private(set) var searchQueries: [String] = []
     private(set) var createdTodos: [(name: String, id: String)] = []
+    private(set) var createdTodoArgs: [(when: Date?, deadline: Date?, project: String?, area: String?,
+                                        tags: [String], checklistItems: [String])] = []
+    private(set) var updatedTodos: [(id: String, name: String?, notes: String?, deadline: Date?, tags: [String]?)] = []
+    private(set) var movedToProject: [(id: String, project: String)] = []
+    var headingsByProject: [String: [Heading]] = [:]
 
     func fetchList(_ list: ListView, limit: Int? = nil) async throws -> [Todo] {
         if let error = errorToThrow { throw error }
@@ -60,7 +66,9 @@ private final class CommandMock: ThingsClientProtocol, @unchecked Sendable {
         return tags
     }
 
-    func fetchHeadings(projectId: String) async throws -> [Heading] { [] }
+    func fetchHeadings(projectId: String) async throws -> [Heading] {
+        headingsByProject[projectId] ?? []
+    }
 
     func fetchRecent(since: Date) async throws -> [Todo] {
         if let error = errorToThrow { throw error }
@@ -79,6 +87,7 @@ private final class CommandMock: ThingsClientProtocol, @unchecked Sendable {
         if let error = errorToThrow { throw error }
         let id = "mock-\(createdTodos.count)"
         createdTodos.append((name, id))
+        createdTodoArgs.append((when, deadline, project, area, tags, checklistItems))
         return id
     }
 
@@ -108,13 +117,20 @@ private final class CommandMock: ThingsClientProtocol, @unchecked Sendable {
         deletedIds.append(id)
     }
 
+    func moveTodoToList(id: String, list: String) async throws {
+        if let error = errorToThrow { throw error }
+        movedToList.append((id, list))
+    }
+
     func moveTodo(id: String, toProject: String) async throws {
         if let error = errorToThrow { throw error }
+        movedToProject.append((id, toProject))
     }
 
     func updateTodo(id: String, name: String?, notes: String?,
                     deadlineDate: Date?, tags: [String]?) async throws {
         if let error = errorToThrow { throw error }
+        updatedTodos.append((id, name, notes, deadlineDate, tags))
     }
 
     func updateProject(id: String, name: String?, notes: String?,
@@ -167,7 +183,7 @@ private let completedTodo = Todo(
 // MARK: - Helper
 
 /// Capture stdout from a block. NOT safe for parallel use.
-private func capture(_ block: () async throws -> Void) async rethrows -> String {
+func capture(_ block: () async throws -> Void) async rethrows -> String {
     let pipe = Pipe()
     let original = dup(STDOUT_FILENO)
     dup2(pipe.fileHandleForWriting.fileDescriptor, STDOUT_FILENO)
@@ -180,10 +196,13 @@ private func capture(_ block: () async throws -> Void) async rethrows -> String 
     return String(data: data, encoding: .utf8) ?? ""
 }
 
-private func setupMock(_ configure: (CommandMock) -> Void = { _ in }) -> CommandMock {
+func setupMock(_ configure: (CommandMock) -> Void = { _ in }) -> CommandMock {
     let mock = CommandMock()
     configure(mock)
     ThingsClientFactory.override = mock
+    // Never touch the real ~/.config/clings/undo-history.json from tests.
+    UndoRecorder.storeOverride = UndoStore(fileURL: FileManager.default.temporaryDirectory
+        .appendingPathComponent("clings-cli-undo-\(UUID().uuidString).json"))
     return mock
 }
 
