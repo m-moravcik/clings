@@ -88,6 +88,17 @@ private struct DoctorReport: Codable {
             checks.append(DoctorCheck(name: "Auth token", status: "warning", message: "Not configured for URL-scheme features", detail: nil))
         }
 
+        if ThingsAppNap.isDisabled(defaultsOutput: ThingsAppNap.readSetting()) {
+            checks.append(DoctorCheck(name: "Things App Nap", status: "ok", message: "Disabled", detail: nil))
+        } else {
+            checks.append(DoctorCheck(
+                name: "Things App Nap",
+                status: "warning",
+                message: "Enabled: URL-scheme writes stall while Things is in the background. Fix: \(ThingsAppNap.disableCommand), then restart Things",
+                detail: nil
+            ))
+        }
+
         let overallStatus = checks.contains(where: { $0.status != "ok" }) ? "needs-attention" : "ok"
         return DoctorReport(overallStatus: overallStatus, checks: checks)
     }

@@ -14,13 +14,17 @@ public enum ChangeConfirmation {
     public enum Outcome: Equatable, Sendable {
         case applied
         case notApplied
-        /// The item could not be read (no database, unknown ID).
+        /// The item could not be read (no database).
         case unknown
     }
 
+    /// Things can take several seconds to apply a write while it launches, syncs or
+    /// processes a burst of URL commands; a shorter wait reports false rejections.
+    public static let defaultTimeout: TimeInterval = 15
+
     public static func waitForChange(
         before: Date,
-        timeout: TimeInterval = 8,
+        timeout: TimeInterval = defaultTimeout,
         interval: TimeInterval = 0.25,
         modificationDate: @Sendable () async throws -> Date
     ) async -> Outcome {

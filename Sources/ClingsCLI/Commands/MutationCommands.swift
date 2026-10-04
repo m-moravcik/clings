@@ -403,6 +403,11 @@ struct UpdateCommand: AsyncParsableCommand {
                     try ThingsURLScheme.updateTodo(id: id, attributes: attributes, authToken: token), itemId: id
                 )
             } catch {
+                // An unconfirmed write may still land and earlier JXA changes did: keep them undoable.
+                // Undo of a change that never landed restores nothing (see UndoPlanner).
+                if let before {
+                    UndoRecorder.record(.update, todoId: id, title: before.name, snapshot: TodoSnapshot(todo: before))
+                }
                 if hasJXAUpdates || project != nil {
                     throw ThingsError.operationFailed(
                         "Partial update: some fields were updated, but the URL scheme update failed: \(error.localizedDescription)"

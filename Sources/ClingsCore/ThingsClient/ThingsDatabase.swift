@@ -354,6 +354,13 @@ public final class ThingsDatabase: Sendable {
         }
     }
 
+    /// Whether the item sits in the Trash. Things ignores URL scheme updates to trashed items.
+    public func isTrashed(_ id: String) throws -> Bool {
+        try openDatabase().read { db in
+            try Int.fetchOne(db, sql: "SELECT trashed FROM TMTask WHERE uuid = ?", arguments: [id]) == 1
+        }
+    }
+
     // MARK: - Name to ID Resolution
 
     /// Resolve a project title or ID to an ID. Trashed projects and repeating

@@ -24,11 +24,25 @@ enum CommandRuntime {
     }
 
     /// Start watching an item before a URL scheme write. The returned closure waits
-    /// until Things applies the write (see `ChangeConfirmation`).
-    @TaskLocal static var watchForChange: @Sendable (String) -> @Sendable () async -> ChangeConfirmation.Outcome = { id in
-        guard let database = try? CommandRuntime.makeDatabase(),
-              let before = try? database.modificationDate(of: id) else {
+    /// until Things applies the write (see `ChangeConfirmation`). Throws when the database
+    /// shows the item does not exist or is in the Trash: Things would never apply the write.
+    @TaskLocal static var watchForChange: @Sendable (String) throws -> @Sendable () async -> ChangeConfirmation.Outcome = { id in
+        guard let database = try? CommandRuntime.makeDatabase() else {
             return { .unknown }
+        }
+        let lookup: Date?
+        let trashed: Bool
+        do {
+            lookup = try database.modificationDate(of: id)
+            trashed = try database.isTrashed(id)
+        } catch {
+            return { .unknown }
+        }
+        guard let before = lookup else {
+            throw ThingsError.notFound(id)
+        }
+        if trashed {
+            throw ThingsError.invalidState("\(id) is in the Trash; Things ignores changes to it. Restore it first (clings undo or the Things app).")
         }
         return {
             await ChangeConfirmation.waitForChange(before: before) {

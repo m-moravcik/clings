@@ -71,6 +71,8 @@ Tests/
 - `json` update payloads differ from the published docs: `add-tags` is an array; `append-`/`prepend-checklist-items` are arrays of checklist-item objects; `tags: []` does not clear tags (AppleScript `set tag names to ""` does). Wrong shapes make Things show an error dialog, so writes are confirmed via `userModificationDate` (`ChangeConfirmation`).
 - `list-id` alone drops the heading; send `heading-id` with it. Only a move to the Inbox detaches a to-do from its project.
 - Scheduling a plain day keeps an existing reminder; `when: someday` clears it.
+- Things ignores URL scheme updates to trashed items and shows an error dialog for unknown IDs; `URLSchemeWrite.perform` refuses both before opening the URL.
+- App Nap: about two minutes after Things loses its visible window, URL scheme writes take 15-50 s to land (sub-second when Things is awake). `defaults write com.culturedcode.ThingsMac NSAppSleepDisabled -bool YES` plus a Things restart fixes it; `clings doctor` checks it. A late write can also bump `userModificationDate` during the next write's watch and confirm it falsely.
 
 ### Design Principles
 

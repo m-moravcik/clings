@@ -293,6 +293,43 @@ extension CommandExecutionTests {
         }
     }
 
+    @Test func updateOfUnknownIdFailsWithoutOpeningURL() async throws {
+        _ = setupMock()
+        defer { ThingsClientFactory.override = nil }
+
+        let recorder = URLRecorder()
+        await #expect(throws: ThingsError.self) {
+            try await CommandRuntime.$openURLScheme.withValue({ url in recorder.urls.append(url) }) {
+                try await CommandRuntime.$watchForChange.withValue({ id in throw ThingsError.notFound(id) }) {
+                    try await CommandRuntime.$loadAuthToken.withValue({ "tok" }) {
+                        _ = try await capture {
+                            var cmd = try UpdateCommand.parse(["Nastaviť", "--add-tags", "AI Task"])
+                            try await cmd.run()
+                        }
+                    }
+                }
+            }
+        }
+        #expect(recorder.urls.isEmpty)
+    }
+
+    @Test func updateKeepsUndoWhenChangeIsUnconfirmed() async throws {
+        _ = setupMock { $0.todoById["todo-1"] = openTodo }
+        defer { ThingsClientFactory.override = nil }
+
+        await #expect(throws: (any Error).self) {
+            _ = try await withURLScheme(outcome: .notApplied) {
+                _ = try await capture {
+                    var cmd = try UpdateCommand.parse(["todo-1", "--add-tags", "AI Task"])
+                    try await cmd.run()
+                }
+            }
+        }
+        let entry = try #require(try latestUndo().first)
+        #expect(entry.operation == .update)
+        #expect(entry.snapshot?.tags == ["home"])
+    }
+
     @Test func addReportsIdWhenFollowUpIsIgnored() async throws {
         _ = setupMock()
         defer { ThingsClientFactory.override = nil }

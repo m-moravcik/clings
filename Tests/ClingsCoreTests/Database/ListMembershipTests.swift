@@ -238,6 +238,15 @@ final class ListMembershipTests: XCTestCase {
         XCTAssertNil(try database().modificationDate(of: "missing"))
     }
 
+    func testIsTrashed() throws {
+        builder.addTask(uuid: "live", title: "Live", start: 1)
+        builder.addTask(uuid: "binned", title: "Binned", trashed: 1, start: 1)
+
+        XCTAssertFalse(try database().isTrashed("live"))
+        XCTAssertTrue(try database().isTrashed("binned"))
+        XCTAssertFalse(try database().isTrashed("missing"))
+    }
+
     // MARK: - Name to ID resolution
 
     func testResolveProjectIdPrefersOpenProjectWithSameTitle() throws {

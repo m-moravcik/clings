@@ -26,15 +26,23 @@ enum AuthToken {
 /// A URL scheme write that is confirmed against the database.
 enum URLSchemeWrite {
     /// Open `url` and wait until Things has applied it to `itemId`.
-    /// Throws when Things demonstrably ignored the write (usually shown as an error dialog in Things).
+    /// Throws, without opening the URL, when the item does not exist, and throws when Things
+    /// did not apply the write in time (a rejection shows as an error dialog in Things).
     @discardableResult
     static func perform(_ url: String, itemId: String) async throws -> ChangeConfirmation.Outcome {
-        let waitForChange = CommandRuntime.watchForChange(itemId)
+        let waitForChange = try CommandRuntime.watchForChange(itemId)
         try CommandRuntime.openURLScheme(url)
         let outcome = await waitForChange()
         if outcome == .notApplied {
+            let seconds = Int(ChangeConfirmation.defaultTimeout)
             throw ThingsError.operationFailed(
-                "Things did not apply the change to \(itemId) within 8 seconds. It may be showing an error message; check the Things window."
+                """
+                Things has not confirmed the change to \(itemId) within \(seconds) seconds. \
+                It may still apply: check with `clings show \(itemId)`. If Things shows an error message, it rejected the change.
+                """ + (ThingsAppNap.isDisabled(defaultsOutput: ThingsAppNap.readSetting()) ? "" : """
+
+                Things is slow in the background while App Nap is on. Fix: \(ThingsAppNap.disableCommand), then restart Things.
+                """)
             )
         }
         return outcome
